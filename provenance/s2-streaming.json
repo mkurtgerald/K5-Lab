@@ -1,0 +1,165 @@
+{
+  "stage": "S2",
+  "candidate": "streaming-learning",
+  "review_date": "2026-09-16",
+  "donor": {
+    "name": "river",
+    "version": "0.26.1",
+    "tag_commit": "64285b9dd6c606804753235fe992bcf25b9856ee",
+    "license": "BSD-3-Clause",
+    "python": ">=3.11",
+    "build_backend": "maturin",
+    "native_extension": true,
+    "core_dependency_constraints": [
+      "scipy>=1.14.1,<2",
+      "numpy>=2.2.5,<3",
+      "narwhals>=2.0.0"
+    ]
+  },
+  "selected_runtime": {
+    "river": "0.26.1",
+    "narwhals": "2.26.0",
+    "numpy": "2.3.5",
+    "scipy": "1.17.0"
+  },
+  "hosted_linux_artifacts": {
+    "river": {
+      "filename": "river-0.26.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+      "sha256": "7d8e6aa749f06e6bd71835ef722c14627bbb049f6929f5bc0d8a65dcd813ad4b",
+      "pypi_upload_date": "2026-08-21",
+      "trusted_publishing": true,
+      "attested_source_commit": "64285b9dd6c606804753235fe992bcf25b9856ee",
+      "attested_source_tag": "0.26.1",
+      "sigstore_transparency_entry": "2550449317"
+    },
+    "narwhals": {
+      "filename": "narwhals-2.26.0-py3-none-any.whl",
+      "sha256": "29326d74f107c347fd1009bd58e38d9f7c7c5b51e6de97bc93dbc325d9038b54",
+      "license": "MIT"
+    }
+  },
+  "hosted_linux_native_review": {
+    "platform": "CPython 3.13.15 / Ubuntu 24.04 x86_64",
+    "exact_head_ci_run": 35147776268,
+    "river": {
+      "native_file_count": 1,
+      "native_bytes": 1208456,
+      "native_extension": "river/_river_rust.cpython-313-x86_64-linux-gnu.so",
+      "native_extension_sha256": "ec674139a52d24c18bb395e4a6cf12909f0b1e5ae42c55f927947538c7944d55",
+      "native_manifest_sha256": "35c08b65cee65068b30bac491fd252938438e0f4df53a2824935cb30a4d69d10",
+      "unresolved_dynamic_dependencies": []
+    },
+    "narwhals": {
+      "native_file_count": 0,
+      "native_manifest_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "unresolved_dynamic_dependencies": []
+    },
+    "numpy": {
+      "native_file_count": 22,
+      "native_bytes": 45576366,
+      "native_manifest_sha256": "9d5d7cfd6f7662443b052628b7d490cc59181ed102982b9bd0dc3c443930bf64",
+      "unresolved_dynamic_dependencies": []
+    },
+    "scipy": {
+      "native_file_count": 114,
+      "native_bytes": 82446698,
+      "native_manifest_sha256": "a60e7dc681ddde428b7f4b1d98bb6e740786de783db002e716ea6b8ae5fda17e",
+      "bundled_dependency_resolutions": [
+        "libquadmath-828275a7.so.0.0.0"
+      ],
+      "unresolved_dynamic_dependencies": []
+    },
+    "rss_smoke": {
+      "scope": "hosted_linux_synthetic_native_rss_smoke_only",
+      "warmup_seed": 7,
+      "seeds": [19, 31, 43, 59, 71],
+      "samples_per_seed": 600,
+      "baseline_rss_kib": 168124,
+      "observed_rss_kib": [168128, 168128, 168128, 168128, 168128],
+      "max_growth_kib": 4,
+      "final_growth_kib": 4,
+      "production_memory_qualified": false
+    }
+  },
+  "robustness_observation": {
+    "scope": "synthetic_stream_robustness_observation_only",
+    "seed": 31,
+    "poisoned_training_samples": 22,
+    "poisoning_stops_before_evaluation": true,
+    "clean": {
+      "answered_rate": 0.9466666666666667,
+      "balanced_accuracy": 0.9578761061946903,
+      "false_negative_rate_answered": 0.04424778761061947,
+      "false_positive_rate_answered": 0.04,
+      "selective_mean_squared_score_error": 0.05696493937606366
+    },
+    "poisoned_history": {
+      "answered_rate": 0.9422222222222222,
+      "balanced_accuracy": 0.9532493072316082,
+      "false_negative_rate_answered": 0.05309734513274336,
+      "false_positive_rate_answered": 0.04040404040404041,
+      "selective_mean_squared_score_error": 0.0579253679304878
+    },
+    "rare_clean": {
+      "count": 14,
+      "error_rate": 0.21428571428571427,
+      "mean_squared_score_error": 0.10754365232567024
+    },
+    "rare_poisoned_history": {
+      "count": 14,
+      "error_rate": 0.35714285714285715,
+      "mean_squared_score_error": 0.1231306390109651
+    },
+    "performance_gate_established": false,
+    "production_qualified": false
+  },
+  "controls": {
+    "synthetic_only": true,
+    "fixed_model_family": true,
+    "partition_isolation": true,
+    "ordered_updates": true,
+    "bounded_sources": 256,
+    "bounded_updates": 100000,
+    "max_features": 32,
+    "remote_access": false,
+    "checkpoint_codec_exposed": true,
+    "authenticated_checkpoint_storage_provided": false,
+    "external_actions": false,
+    "authorization": false
+  },
+  "artifact_review": {
+    "exact_hosted_wheel_digest_captured": true,
+    "pypi_provenance_attestation_captured": true,
+    "hosted_linux_native_inventory_complete": true,
+    "hosted_linux_native_rss_smoke_complete": true,
+    "native_library_inventory_complete": false,
+    "sbom_complete": false,
+    "notices_complete": false,
+    "vulnerability_review_complete": false,
+    "platform_review_complete": false,
+    "commercial_distribution_approved": false
+  },
+  "failure_accounting": {
+    "native_audit_first_attempt_failure": {
+      "classification": "implementation_audit_logic",
+      "unchanged_retry": false,
+      "root_cause": "wheel-local shared library was misclassified as externally unresolved when inspected standalone",
+      "regression_added": true,
+      "corrected_exact_head": "cacb7d861691cf7e4a4fd5b2185b9fb84320bacc",
+      "corrected_ci_run": 35147251656,
+      "corrected_ci_passed": true
+    }
+  },
+  "notes": [
+    "The Linux CPython 3.13 River wheel recorded here is the exact filename selected by hosted CI.",
+    "PyPI attests that this River wheel was published from the recorded upstream tag commit.",
+    "Hosted Linux native inventory is exact for the installed runtime but is not cross-platform release-bundle approval.",
+    "The RSS smoke includes process-native allocations at OS RSS granularity but is not production memory qualification or allocation attribution.",
+    "Rare-tail synthetic performance is recorded as a limitation rather than generalized into a production claim.",
+    "Artifact digest capture is not SBOM, notice, vulnerability, or distribution approval.",
+    "The checkpoint envelope digest detects accidental corruption; it does not authenticate an untrusted writer.",
+    "S2 experiment acceptance is separate from S4 release approval.",
+    "Scores are not claimed to be calibrated probabilities.",
+    "No donor source or production trained artifact is vendored."
+  ]
+}

@@ -18,6 +18,7 @@ are preliminary screening only; review exact distribution contents independently
 - wcwidth: https://github.com/jquast/wcwidth
 - OR-Tools: https://github.com/google/or-tools
 - River: https://github.com/online-ml/river
+- Narwhals: https://github.com/narwhals-dev/narwhals
 - Gymnasium: https://github.com/Farama-Foundation/Gymnasium/blob/main/LICENSE
 - Stable-Baselines3: https://github.com/DLR-RM/stable-baselines3
 - Ray: https://github.com/ray-project/ray
@@ -43,6 +44,17 @@ digests are recorded in `docs/S1_ALLOCATION.md` and `provenance/s1-allocation.js
 The OR-Tools and pandas wheels contain native code. Project-level terms do not
 replace actual bundle/native-library review. Only the CP-SAT Python API is called;
 no external solver selection is exposed.
+
+## S2 streaming chain
+
+The streaming-learning candidate pins River 0.26.1 and Narwhals 2.26.0. River's
+tagged project metadata declares BSD-3-Clause and core dependencies on SciPy,
+NumPy, and Narwhals. Narwhals is MIT. River is built with Maturin and includes a
+Rust extension, so project-level license screening is not a native bundle review.
+The public adapter exposes only a fixed learner/detector boundary and synthetic
+fixtures. Exact downloaded artifact digest, native-library inventory, notices,
+SBOM, vulnerability review, and platform evidence remain required before any
+commercial redistribution approval.
 
 ## Required release review
 

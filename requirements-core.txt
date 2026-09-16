@@ -23,3 +23,5 @@ python-dateutil==2.9.0.post0
 pytz==2026.3.post1
 tzdata==2025.3
 six==1.17.0
+river==0.26.1
+narwhals==2.26.0
