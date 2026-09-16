@@ -36,3 +36,5 @@ jobs:
         run: python tools/run_allocation_benchmark.py
       - name: Streaming drift smoke
         run: python tools/run_stream_benchmark.py --samples 600
+      - name: Streaming quality smoke
+        run: python tools/run_stream_quality.py --samples 600
