@@ -32,16 +32,24 @@ A separate multi-seed acceptance sweep fixes the abstention margin at 0.04 and e
 
 The fixture is synthetic and generic. It is not evidence of real-world sensor intelligence, calibration, safety, or production quality. No production weights or input records are saved.
 
+## Robustness observations
+
+S2 now includes deterministic synthetic prior-label corruption, rare-tail observations, missing-feature rejection, and non-finite-feature rejection. For seed 31, 22 training labels were flipped before the held-out evaluation window and then clean supervision resumed. The clean held-out stream answered 94.67% with balanced accuracy 95.79%, while the prior-poisoned history answered 94.22% with balanced accuracy 95.32%. The rare-tail slice contained 14 observations; its clean error rate was 21.43% and the prior-poisoned-history error rate was 35.71%.
+
+These figures are observations, not a robustness certification or a product threshold. In particular, the rare-tail result is retained as an explicit limitation rather than hidden behind aggregate accuracy. Missing-length and NaN/inf feature inputs fail closed before model update, and the robustness harness exposes no external action path.
+
 ## Hosted Linux native/runtime evidence
 
-Exact-head CI now inventories installed native files for the pinned River/Narwhals/NumPy/SciPy runtime, hashes every native file, records a deterministic manifest digest, inspects Linux dynamic dependencies, and fails closed on unresolved external SONAMEs. A bundled dependency is accepted as wheel-local only when the exact missing SONAME basename is itself present in the same installed distribution; unknown missing libraries remain fatal.
+Exact-head CI inventories installed native files for the pinned River/Narwhals/NumPy/SciPy runtime, hashes every native file, records a deterministic manifest digest, inspects Linux dynamic dependencies, and fails closed on unresolved external SONAMEs. A bundled dependency is accepted as wheel-local only when the exact missing SONAME basename is itself present in the same installed distribution; unknown missing libraries remain fatal.
 
-On CPython 3.13.15 / Ubuntu 24.04 x86_64, River 0.26.1 contained one native extension, `river/_river_rust.cpython-313-x86_64-linux-gnu.so`, SHA-256 `ec674139a52d24c18bb395e4a6cf12909f0b1e5ae42c55f927947538c7944d55`. Narwhals 2.26.0 contained no native files. NumPy 2.3.5 contained 22 native files with manifest SHA-256 `9d5d7cfd6f7662443b052628b7d490cc59181ed102982b9bd0dc3c443930bf64`; SciPy 1.17.0 contained 114 native files with manifest SHA-256 `a60e7dc681ddde428b7f4b1d98bb6e740786de783db002e716ea6b8ae5fda17e`. The hosted Linux audit reported no unresolved dynamic dependencies.
+On CPython 3.13.15 / Ubuntu 24.04 x86_64, River 0.26.1 contains one native extension, `river/_river_rust.cpython-313-x86_64-linux-gnu.so`, SHA-256 `ec674139a52d24c18bb395e4a6cf12909f0b1e5ae42c55f927947538c7944d55`. Narwhals 2.26.0 contains no native files. NumPy 2.3.5 contains 22 native files with manifest SHA-256 `9d5d7cfd6f7662443b052628b7d490cc59181ed102982b9bd0dc3c443930bf64`; SciPy 1.17.0 contains 114 native files with manifest SHA-256 `a60e7dc681ddde428b7f4b1d98bb6e740786de783db002e716ea6b8ae5fda17e`. The hosted Linux audit reports no unresolved dynamic dependencies.
 
-A post-warmup RSS smoke then exercised five fixed synthetic seeds (19/31/43/59/71), 600 samples each. Baseline RSS was 169872 KiB; all measured runs were 169876 KiB, for 4 KiB maximum observed growth. This is only a bounded hosted-Linux synthetic leak smoke. It is not a production memory envelope, heap/native-allocation attribution, long-duration soak, or cross-platform qualification.
+A post-warmup RSS smoke exercises five fixed synthetic seeds (19/31/43/59/71), 600 samples each. On the latest exact-head run baseline RSS was 168124 KiB and each measured run was 168128 KiB, for 4 KiB maximum observed growth. This is only a bounded hosted-Linux synthetic leak smoke. It is not a production memory envelope, heap/native-allocation attribution, long-duration soak, or cross-platform qualification.
 
 The first native-audit CI attempt exposed an audit defect: directly running `ldd` on a SciPy-bundled shared library misclassified a wheel-local `libquadmath` as externally unresolved. That deterministic implementation failure was not rerun unchanged. The audit was corrected to distinguish exact wheel-local basenames from truly unresolved external dependencies, a regression was added, and the corrected exact head passed the complete CI set.
 
-## Remaining S2 exit work
+## Gate boundary
 
-Hosted Linux native inventory and a bounded native-inclusive RSS smoke are now evidenced, but S2 still requires release-level SBOM generation/review, required notices review, known-vulnerability review, and target-platform/release-bundle review. Native inventory outside the hosted Linux runtime is not claimed complete. Commercial distribution remains false until those controls are complete.
+S2 is an experiment/evaluation gate, not a release gate. Its exit evidence is the bounded streaming adapter, failure-path coverage, drift and multi-seed held-out evaluation, abstention/error measurements, checkpoint/reload handling, robustness observations, native-inclusive bounded-memory smoke, provenance, and exact-head CI. Commercial distribution remains false.
+
+Release-level SBOM generation/review, required notices, known-vulnerability review, and target-platform/release-bundle review remain mandatory before GTM approval and are owned by the packaging/release gate in `docs/SPRINTS.md`. Native inventory outside the hosted Linux runtime is not claimed complete.

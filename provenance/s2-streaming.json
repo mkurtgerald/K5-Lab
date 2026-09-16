@@ -40,7 +40,7 @@
   },
   "hosted_linux_native_review": {
     "platform": "CPython 3.13.15 / Ubuntu 24.04 x86_64",
-    "exact_head_ci_run": 35147251656,
+    "exact_head_ci_run": 35147776268,
     "river": {
       "native_file_count": 1,
       "native_bytes": 1208456,
@@ -74,12 +74,44 @@
       "warmup_seed": 7,
       "seeds": [19, 31, 43, 59, 71],
       "samples_per_seed": 600,
-      "baseline_rss_kib": 169872,
-      "observed_rss_kib": [169876, 169876, 169876, 169876, 169876],
+      "baseline_rss_kib": 168124,
+      "observed_rss_kib": [168128, 168128, 168128, 168128, 168128],
       "max_growth_kib": 4,
       "final_growth_kib": 4,
       "production_memory_qualified": false
     }
+  },
+  "robustness_observation": {
+    "scope": "synthetic_stream_robustness_observation_only",
+    "seed": 31,
+    "poisoned_training_samples": 22,
+    "poisoning_stops_before_evaluation": true,
+    "clean": {
+      "answered_rate": 0.9466666666666667,
+      "balanced_accuracy": 0.9578761061946903,
+      "false_negative_rate_answered": 0.04424778761061947,
+      "false_positive_rate_answered": 0.04,
+      "selective_mean_squared_score_error": 0.05696493937606366
+    },
+    "poisoned_history": {
+      "answered_rate": 0.9422222222222222,
+      "balanced_accuracy": 0.9532493072316082,
+      "false_negative_rate_answered": 0.05309734513274336,
+      "false_positive_rate_answered": 0.04040404040404041,
+      "selective_mean_squared_score_error": 0.0579253679304878
+    },
+    "rare_clean": {
+      "count": 14,
+      "error_rate": 0.21428571428571427,
+      "mean_squared_score_error": 0.10754365232567024
+    },
+    "rare_poisoned_history": {
+      "count": 14,
+      "error_rate": 0.35714285714285715,
+      "mean_squared_score_error": 0.1231306390109651
+    },
+    "performance_gate_established": false,
+    "production_qualified": false
   },
   "controls": {
     "synthetic_only": true,
@@ -123,9 +155,10 @@
     "PyPI attests that this River wheel was published from the recorded upstream tag commit.",
     "Hosted Linux native inventory is exact for the installed runtime but is not cross-platform release-bundle approval.",
     "The RSS smoke includes process-native allocations at OS RSS granularity but is not production memory qualification or allocation attribution.",
+    "Rare-tail synthetic performance is recorded as a limitation rather than generalized into a production claim.",
     "Artifact digest capture is not SBOM, notice, vulnerability, or distribution approval.",
     "The checkpoint envelope digest detects accidental corruption; it does not authenticate an untrusted writer.",
-    "Candidate acceptance is separate from release approval.",
+    "S2 experiment acceptance is separate from S4 release approval.",
     "Scores are not claimed to be calibrated probabilities.",
     "No donor source or production trained artifact is vendored."
   ]
