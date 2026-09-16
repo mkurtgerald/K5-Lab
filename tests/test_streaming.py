@@ -3,6 +3,8 @@ import math
 import unittest
 
 from mosaic_lab.streaming import (
+    LEARNING_RATE,
+    MODEL_ID,
     MAX_SOURCES,
     RiverBinaryAdapter,
     StreamOutcome,
@@ -51,11 +53,13 @@ class RiverAdapterTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             adapter.process(sample(1))
 
-    def test_unlabeled_samples_never_update(self):
+    def test_unlabeled_samples_never_update_or_mutate_state(self):
         adapter = RiverBinaryAdapter("p1", feature_count=2)
         unlabeled = sample(label=None)
+        receipt_before = adapter.state_receipt()
         predicted = adapter.predict(unlabeled)
         self.assertEqual(adapter.updates, 0)
+        self.assertEqual(adapter.state_receipt(), receipt_before)
         self.assertFalse(predicted.authorized)
         with self.assertRaises(ValueError):
             adapter.process(unlabeled)
@@ -90,7 +94,7 @@ class RiverAdapterTests(unittest.TestCase):
         self.assertEqual(left_scores, right_scores)
         self.assertEqual(left.state_receipt(), right.state_receipt())
 
-    def test_benchmark_is_bounded_and_non_executing(self):
+    def test_benchmark_is_bounded_non_executing_and_adapts(self):
         result = benchmark_stream(size=600, seed=19)
         self.assertEqual(result["scope"], "synthetic_stream_demonstration_only")
         self.assertEqual(result["samples"], 600)
@@ -101,9 +105,18 @@ class RiverAdapterTests(unittest.TestCase):
         self.assertFalse(result["production_qualified"])
         self.assertFalse(result["score_calibration_established"])
         self.assertEqual(result["versions"]["river"], "0.26.1")
+        self.assertEqual(result["learner"]["model_id"], MODEL_ID)
+        self.assertEqual(result["learner"]["learning_rate"], LEARNING_RATE)
+        self.assertTrue(result["learner"]["standardized"])
         for family in ("streaming", "frozen_batch"):
             self.assertTrue(0.0 <= result[family]["balanced_accuracy"] <= 1.0)
             self.assertTrue(0.0 <= result[family]["mean_squared_score_error"] <= 1.0)
+        self.assertGreaterEqual(result["streaming"]["balanced_accuracy"], 0.70)
+        self.assertLess(
+            result["streaming"]["mean_squared_score_error"],
+            result["frozen_batch"]["mean_squared_score_error"],
+        )
+        self.assertLessEqual(result["streaming"]["abstention_rate"], 0.50)
         self.assertGreaterEqual(result["update_latency_ms"]["p95"], 0.0)
 
 

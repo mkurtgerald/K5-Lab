@@ -15,7 +15,7 @@ from math import ceil, isfinite
 from time import perf_counter
 
 import numpy as np
-from river import drift, linear_model
+from river import drift, linear_model, optim, preprocessing
 from sklearn.linear_model import LogisticRegression as BatchLogisticRegression
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.pipeline import make_pipeline
@@ -27,7 +27,8 @@ MAX_FEATURES = 32
 MAX_SOURCES = 256
 MAX_UPDATES = 100_000
 MAX_ABS_FEATURE = 1_000_000.0
-MODEL_ID = "river-logistic-0_26_1-v1"
+LEARNING_RATE = 0.1
+MODEL_ID = "river-standardized-logistic-0_26_1-sgd0_1-v2"
 
 
 def _positive_int(name: str, value: int, maximum: int) -> int:
@@ -43,6 +44,14 @@ def _finite_feature(value: float) -> float:
     if not isfinite(value) or abs(value) > MAX_ABS_FEATURE:
         raise ValueError("feature out of range")
     return value
+
+
+def _new_model():
+    """Create the fixed, reviewed River learning pipeline."""
+    return preprocessing.StandardScaler() | linear_model.LogisticRegression(
+        optimizer=optim.SGD(LEARNING_RATE),
+        l2=0.001,
+    )
 
 
 @dataclass(frozen=True)
@@ -98,7 +107,7 @@ class StreamOutcome:
 
 
 class RiverBinaryAdapter:
-    """Fixed River logistic learner with bounded state and prequential updates."""
+    """Fixed standardized River logistic learner with bounded state."""
 
     def __init__(
         self,
@@ -122,7 +131,7 @@ class RiverBinaryAdapter:
         self.drift_delta = float(drift_delta)
         if not 0.0 < self.drift_delta < 1.0:
             raise ValueError("drift delta out of range")
-        self._model = linear_model.LogisticRegression(l2=0.001)
+        self._model = _new_model()
         self._drift = drift.ADWIN(delta=self.drift_delta)
         self._last_by_source: dict[str, datetime] = {}
         self._updates = 0
@@ -203,6 +212,8 @@ class RiverBinaryAdapter:
             "sources": sorted((key, utc(value).isoformat()) for key, value in self._last_by_source.items()),
             "drift_detections": int(self._drift.n_detections),
             "model_id": MODEL_ID,
+            "learning_rate": LEARNING_RATE,
+            "standardized": True,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
@@ -292,6 +303,11 @@ def benchmark_stream(*, size: int = 2400, seed: int = 31) -> dict[str, object]:
         "updates": adapter.updates,
         "sources": adapter.source_count,
         "state_receipt": adapter.state_receipt(),
+        "learner": {
+            "model_id": MODEL_ID,
+            "learning_rate": LEARNING_RATE,
+            "standardized": True,
+        },
         "versions": versions,
         "score_calibration_established": False,
         "production_qualified": False,
