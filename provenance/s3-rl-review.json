@@ -24,10 +24,27 @@
     "source_commit": "2b3ec34829036a65cd9d1398ea72a0167dc37470",
     "python": ">=3.10",
     "project_license_expression": "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT",
-    "linux_cp313_wheel": "torch-2.14.0-cp313-cp313-manylinux_2_28_x86_64.whl",
-    "linux_cp313_wheel_sha256": "84bf384779a10c02fc3c6bdbab71a9cb66b0dd93c652d1ed5d6dfc0cb37e5962",
-    "linux_cp313_wheel_size_mb": 554.6,
-    "trusted_publishing": false
+    "evaluated_runtime": "2.14.0+cpu",
+    "linux_cp313_cpu_wheel": "torch-2.14.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+    "linux_cp313_cpu_wheel_size_bytes_observed": 196253940,
+    "linux_cp313_cpu_wheel_sha256": null,
+    "artifact_digest_status": "exact-head CI capture required",
+    "non_cpu_pypi_wheel_reviewed_but_not_used": {
+      "wheel": "torch-2.14.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+      "sha256": "84bf384779a10c02fc3c6bdbab71a9cb66b0dd93c652d1ed5d6dfc0cb37e5962",
+      "size_mb": 554.6
+    }
+  },
+  "observed_cpu_runtime_transitives": {
+    "filelock": "3.32.3",
+    "fsspec": "2026.7.0",
+    "jinja2": "3.1.6",
+    "markupsafe": "3.0.3",
+    "mpmath": "1.3.0",
+    "networkx": "3.6.1",
+    "setuptools": "78.1.0",
+    "sympy": "1.14.0",
+    "typing_extensions_from_core": "4.16.0"
   },
   "integration_contract": {
     "project_owned_policy_adapter": true,
@@ -47,8 +64,18 @@
     "gpu_enabled": false,
     "paid_compute": false,
     "remote_tracking": false,
-    "training_started": false,
-    "reason": "review the large native runtime and project-owned fail-closed proposal boundary before isolated bounded training"
+    "training_started": true,
+    "training_algorithm": "DQN",
+    "training_seed": 41,
+    "acceptance_seeds": [
+      101,
+      103,
+      107,
+      109,
+      113
+    ],
+    "training_timesteps": 8192,
+    "saved_policy": false
   },
   "release_review": {
     "native_bundle_review_complete": false,

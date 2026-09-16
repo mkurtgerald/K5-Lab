@@ -1,0 +1,151 @@
+name: S3 runtime provenance audit
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/s3-runtime-audit.yml"
+      - "requirements-s3-runtime.txt"
+      - "provenance/s3-rl-review.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: s3-runtime-audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: src
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+
+      - name: Publication boundary
+        run: python tools/check_public.py --index
+
+      - name: Install exact core versions
+        run: python -m pip install --disable-pip-version-check -r requirements-core.txt
+
+      - name: Download and fingerprint exact CPU PyTorch wheel
+        run: |
+          rm -rf /tmp/s3-runtime
+          mkdir -p /tmp/s3-runtime
+          python -m pip download --disable-pip-version-check --no-deps \
+            --index-url https://download.pytorch.org/whl/cpu \
+            --dest /tmp/s3-runtime "torch==2.14.0+cpu"
+          python - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+
+          expected_name = "torch-2.14.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl"
+          wheels = list(Path("/tmp/s3-runtime").glob("torch-*.whl"))
+          if len(wheels) != 1:
+              raise RuntimeError(f"expected one torch wheel, found {[p.name for p in wheels]}")
+          wheel = wheels[0]
+          if wheel.name != expected_name:
+              raise RuntimeError(f"unexpected torch artifact: {wheel.name}")
+          digest = sha256()
+          with wheel.open("rb") as handle:
+              for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                  digest.update(chunk)
+          print({
+              "artifact": wheel.name,
+              "sha256": digest.hexdigest(),
+              "size_bytes": wheel.stat().st_size,
+          })
+          PY
+
+      - name: Install exact isolated Python packages
+        run: python -m pip install --disable-pip-version-check --no-deps -r requirements-s3-runtime.txt
+
+      - name: Install downloaded CPU PyTorch artifact
+        run: >-
+          python -m pip install --disable-pip-version-check --no-deps
+          "/tmp/s3-runtime/torch-2.14.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl"
+
+      - name: Verify dependency closure
+        run: python -m pip check
+
+      - name: Inventory resolved runtime and native objects
+        run: |
+          python - <<'PY'
+          from hashlib import sha256
+          from importlib.metadata import metadata, version
+          import json
+          from pathlib import Path
+
+          import stable_baselines3
+          import torch
+
+          packages = (
+              "stable-baselines3",
+              "torch",
+              "filelock",
+              "fsspec",
+              "jinja2",
+              "markupsafe",
+              "mpmath",
+              "networkx",
+              "setuptools",
+              "sympy",
+          )
+          resolved = {}
+          for package in packages:
+              meta = metadata(package)
+              resolved[package] = {
+                  "version": version(package),
+                  "license_expression": meta.get("License-Expression"),
+                  "license": meta.get("License"),
+              }
+
+          if stable_baselines3.__version__ != "2.9.0":
+              raise RuntimeError(stable_baselines3.__version__)
+          if torch.__version__ != "2.14.0+cpu":
+              raise RuntimeError(torch.__version__)
+          if torch.cuda.is_available():
+              raise RuntimeError("CPU-only audit unexpectedly exposed CUDA")
+
+          root = Path(torch.__file__).resolve().parent
+          native_paths = sorted(
+              {
+                  path
+                  for pattern in ("*.so", "*.so.*")
+                  for path in root.rglob(pattern)
+                  if path.is_file()
+              }
+          )
+          if not native_paths:
+              raise RuntimeError("no torch native objects found")
+
+          native = []
+          for path in native_paths:
+              digest = sha256()
+              with path.open("rb") as handle:
+                  for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              native.append({
+                  "path": str(path.relative_to(root)),
+                  "size_bytes": path.stat().st_size,
+                  "sha256": digest.hexdigest(),
+              })
+
+          print(json.dumps({
+              "resolved": resolved,
+              "cuda_available": False,
+              "native_object_count": len(native),
+              "native_objects": native,
+          }, sort_keys=True))
+          PY
