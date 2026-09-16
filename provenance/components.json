@@ -4,13 +4,13 @@
   "components": [
     {
       "name": "rdflib",
-      "status": "used",
-      "version": "7.5.0",
+      "status": "s1-candidate",
+      "version": "7.6.0",
       "upstream": "https://github.com/RDFLib/rdflib",
-      "installed_metadata_sha256": "7343a0470c125ec1c6de16712e1a44eaecb052eedf603c61e3872c36304ed136",
-      "artifact_sha256": null,
+      "artifact_sha256": "30c0a3ebf4c0e09215f066be7246794b6492e054e782d7ac2a34c9f70a15e0dd",
       "distribution_approved": false,
-      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+      "review_scope": "PyPI wheel digest and project license reviewed for S1 candidate; installed metadata, bundle and distribution review pending",
+      "project_license": "BSD-3-Clause"
     },
     {
       "name": "scikit-learn",
@@ -84,12 +84,13 @@
     },
     {
       "name": "pySHACL",
-      "status": "candidate",
+      "status": "s1-candidate",
       "upstream": "https://github.com/RDFLib/pySHACL",
       "project_license": "Apache-2.0",
-      "version": null,
-      "artifact_sha256": null,
-      "distribution_approved": false
+      "version": "0.40.1",
+      "artifact_sha256": "27dd58c8ddfa103303b4a8c40b2c666332ffc912dbcd3137f7adc7b7bc5e6bda",
+      "distribution_approved": false,
+      "review_scope": "PyPI wheel digest, direct runtime dependencies and project license reviewed; execution and bundle approval pending"
     },
     {
       "name": "OR-Tools",
@@ -144,6 +145,56 @@
       "version": null,
       "artifact_sha256": null,
       "distribution_approved": false
+    },
+    {
+      "name": "owlrl",
+      "status": "s1-transitive",
+      "version": "7.6.2",
+      "upstream": "https://github.com/RDFLib/OWL-RL",
+      "project_license": "W3C-20150513",
+      "artifact_sha256": "83347bf7f133979e87b2b18695d51d25510b99cec3f6919b5df05d4fbf058ae0",
+      "distribution_approved": false,
+      "review_scope": "Required by pySHACL; PyPI wheel digest and published license reviewed; notice/bundle review pending"
+    },
+    {
+      "name": "packaging",
+      "status": "s1-transitive",
+      "version": "26.3",
+      "upstream": "https://github.com/pypa/packaging",
+      "project_license": "Apache-2.0 OR BSD-2-Clause",
+      "artifact_sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "distribution_approved": false,
+      "review_scope": "Required by pySHACL; PyPI wheel digest and published license reviewed; bundle review pending"
+    },
+    {
+      "name": "prettytable",
+      "status": "s1-transitive",
+      "version": "3.18.0",
+      "upstream": "https://github.com/prettytable/prettytable",
+      "project_license": "BSD-3-Clause",
+      "artifact_sha256": "b3346e0e6f79180833aebaac088ae926340586cf6d7d991b9eb125b65f72313a",
+      "distribution_approved": false,
+      "review_scope": "Required by pySHACL on selected Python; PyPI wheel digest and project license reviewed; bundle review pending"
+    },
+    {
+      "name": "wcwidth",
+      "status": "s1-transitive",
+      "version": "0.8.3",
+      "upstream": "https://github.com/jquast/wcwidth",
+      "project_license": "MIT",
+      "artifact_sha256": "d5b73dba6158a595ec9370350e7f2637bcac8d6c5e4fde34f30fcffb6103a5e4",
+      "distribution_approved": false,
+      "review_scope": "Required by prettytable; PyPI wheel digest and project license reviewed; bundle review pending"
+    },
+    {
+      "name": "html5rdf",
+      "status": "s1-transitive",
+      "version": "1.2.1",
+      "upstream": "https://github.com/RDFLib/html5rdf",
+      "project_license": "MIT",
+      "artifact_sha256": "1f519121bc366af3e485310dc8041d2e86e5173c1a320fac3dc9d2604069b83e",
+      "distribution_approved": false,
+      "review_scope": "Required by RDFLib html extra selected by pySHACL; PyPI wheel digest and project license reviewed; bundle review pending"
     }
   ]
 }
