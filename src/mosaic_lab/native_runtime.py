@@ -100,31 +100,47 @@ def _manifest_digest(native_files: Iterable[dict[str, object]]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _partition_missing_dependencies(
+    missing: Iterable[str], native_basenames: set[str]
+) -> tuple[list[str], list[str]]:
+    bundled = sorted({name for name in missing if name in native_basenames})
+    unresolved = sorted({name for name in missing if name not in native_basenames})
+    return bundled, unresolved
+
+
 def inventory_distribution(name: str, expected_version: str) -> dict[str, object]:
     distribution = importlib.metadata.distribution(name)
     version = distribution.version
     if version != expected_version:
         raise RuntimeError(f"{name} version mismatch: {version} != {expected_version}")
-    native_entries: list[dict[str, object]] = []
-    dynamic_dependencies: set[str] = set()
-    unresolved: set[str] = set()
-    total_bytes = 0
+    candidates: list[tuple[str, Path]] = []
     for entry in sorted(distribution.files or (), key=lambda value: str(value)):
         relative = str(entry).replace("\\", "/")
         if not _is_native_file(relative):
             continue
-        if len(native_entries) >= MAX_NATIVE_FILES_PER_DISTRIBUTION:
+        if len(candidates) >= MAX_NATIVE_FILES_PER_DISTRIBUTION:
             raise RuntimeError(f"{name} native-file budget exceeded")
         path = Path(distribution.locate_file(entry)).resolve()
         if not path.is_file():
             raise RuntimeError(f"{name} native file missing: {relative}")
+        candidates.append((relative, path))
+
+    native_basenames = {path.name for _, path in candidates}
+    native_entries: list[dict[str, object]] = []
+    dynamic_dependencies: set[str] = set()
+    bundled_resolutions: set[str] = set()
+    unresolved: set[str] = set()
+    total_bytes = 0
+    for relative, path in candidates:
         size = path.stat().st_size
         total_bytes += size
         if total_bytes > MAX_NATIVE_BYTES_PER_DISTRIBUTION:
             raise RuntimeError(f"{name} native-byte budget exceeded")
         dependencies, missing = _dynamic_dependencies(path)
         dynamic_dependencies.update(dependencies)
-        unresolved.update(missing)
+        bundled, external_missing = _partition_missing_dependencies(missing, native_basenames)
+        bundled_resolutions.update(bundled)
+        unresolved.update(external_missing)
         native_entries.append({"path": relative, "size": size, "sha256": _sha256_file(path)})
     if name in {"river", "numpy", "scipy"} and not native_entries:
         raise RuntimeError(f"expected native files for {name}")
@@ -140,6 +156,7 @@ def inventory_distribution(name: str, expected_version: str) -> dict[str, object
         "native_manifest_sha256": _manifest_digest(native_entries),
         "native_files": native_entries,
         "dynamic_dependency_sonames": sorted(dynamic_dependencies),
+        "bundled_dependency_resolutions": sorted(bundled_resolutions),
         "unresolved_dynamic_dependencies": [],
     }
 

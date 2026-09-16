@@ -1,6 +1,12 @@
 import unittest
 
-from mosaic_lab.native_runtime import _is_native_file, _manifest_digest, _parse_ldd, _parse_proc_status
+from mosaic_lab.native_runtime import (
+    _is_native_file,
+    _manifest_digest,
+    _parse_ldd,
+    _parse_proc_status,
+    _partition_missing_dependencies,
+)
 
 
 class NativeRuntimeTests(unittest.TestCase):
@@ -25,6 +31,14 @@ class NativeRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(deps, ["libmissing.so.1", "libpython3.13.so.1.0", "linux-vdso.so.1"])
         self.assertEqual(missing, ["libmissing.so.1"])
+
+    def test_bundled_missing_library_is_not_misclassified_as_external(self):
+        bundled, unresolved = _partition_missing_dependencies(
+            ["libquadmath-abc.so.0", "libexternal.so.1"],
+            {"libquadmath-abc.so.0", "_module.so"},
+        )
+        self.assertEqual(bundled, ["libquadmath-abc.so.0"])
+        self.assertEqual(unresolved, ["libexternal.so.1"])
 
     def test_proc_status_parser_fails_closed(self):
         self.assertEqual(_parse_proc_status("Name:\tpython\nVmRSS:\t12345 kB\n"), 12345)
