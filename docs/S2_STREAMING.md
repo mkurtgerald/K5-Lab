@@ -8,7 +8,7 @@ River 0.26.1 is the first incremental-learning donor evaluated for S2. The upstr
 
 The candidate pins River 0.26.1 and Narwhals 2.26.0 alongside the already pinned NumPy/SciPy runtime. Narwhals is MIT.
 
-Hosted Linux CI selects `river-0.26.1-cp313-cp313-manylinux_2_28_x86_64.whl`. Its PyPI SHA-256 is `7d8e6aa749f06e6bd71835ef722c14627bbb049f6929f5bc0d8a65dcd813ad4b`; PyPI Trusted Publishing provenance identifies upstream tag `0.26.1` at commit `64285b9dd6c606804753235fe992bcf25b9856ee`. The selected Narwhals wheel SHA-256 is also recorded in `provenance/s2-streaming.json`. Digest/provenance capture does not approve the embedded native bundle for distribution; native-library inventory, notices, SBOM, vulnerability and platform review remain open.
+Hosted Linux CI selects `river-0.26.1-cp313-cp313-manylinux_2_28_x86_64.whl`. Its PyPI SHA-256 is `7d8e6aa749f06e6bd71835ef722c14627bbb049f6929f5bc0d8a65dcd813ad4b`; PyPI Trusted Publishing provenance identifies upstream tag `0.26.1` at commit `64285b9dd6c606804753235fe992bcf25b9856ee`. The selected Narwhals wheel SHA-256 is also recorded in `provenance/s2-streaming.json`. Digest/provenance capture does not approve the embedded native bundle for distribution; native-library inventory, notices, SBOM, vulnerability and platform review remain separate release controls.
 
 ## Adapter boundary
 
@@ -32,6 +32,16 @@ A separate multi-seed acceptance sweep fixes the abstention margin at 0.04 and e
 
 The fixture is synthetic and generic. It is not evidence of real-world sensor intelligence, calibration, safety, or production quality. No production weights or input records are saved.
 
+## Hosted Linux native/runtime evidence
+
+Exact-head CI now inventories installed native files for the pinned River/Narwhals/NumPy/SciPy runtime, hashes every native file, records a deterministic manifest digest, inspects Linux dynamic dependencies, and fails closed on unresolved external SONAMEs. A bundled dependency is accepted as wheel-local only when the exact missing SONAME basename is itself present in the same installed distribution; unknown missing libraries remain fatal.
+
+On CPython 3.13.15 / Ubuntu 24.04 x86_64, River 0.26.1 contained one native extension, `river/_river_rust.cpython-313-x86_64-linux-gnu.so`, SHA-256 `ec674139a52d24c18bb395e4a6cf12909f0b1e5ae42c55f927947538c7944d55`. Narwhals 2.26.0 contained no native files. NumPy 2.3.5 contained 22 native files with manifest SHA-256 `9d5d7cfd6f7662443b052628b7d490cc59181ed102982b9bd0dc3c443930bf64`; SciPy 1.17.0 contained 114 native files with manifest SHA-256 `a60e7dc681ddde428b7f4b1d98bb6e740786de783db002e716ea6b8ae5fda17e`. The hosted Linux audit reported no unresolved dynamic dependencies.
+
+A post-warmup RSS smoke then exercised five fixed synthetic seeds (19/31/43/59/71), 600 samples each. Baseline RSS was 169872 KiB; all measured runs were 169876 KiB, for 4 KiB maximum observed growth. This is only a bounded hosted-Linux synthetic leak smoke. It is not a production memory envelope, heap/native-allocation attribution, long-duration soak, or cross-platform qualification.
+
+The first native-audit CI attempt exposed an audit defect: directly running `ldd` on a SciPy-bundled shared library misclassified a wheel-local `libquadmath` as externally unresolved. That deterministic implementation failure was not rerun unchanged. The audit was corrected to distinguish exact wheel-local basenames from truly unresolved external dependencies, a regression was added, and the corrected exact head passed the complete CI set.
+
 ## Remaining S2 exit work
 
-Before S2 can close, the candidate still requires native-library inventory, explicit native-allocation/memory-growth review, SBOM/notices/vulnerability/platform review, and exact-head CI on the complete S2 acceptance set. Commercial distribution remains false until release review is complete.
+Hosted Linux native inventory and a bounded native-inclusive RSS smoke are now evidenced, but S2 still requires release-level SBOM generation/review, required notices review, known-vulnerability review, and target-platform/release-bundle review. Native inventory outside the hosted Linux runtime is not claimed complete. Commercial distribution remains false until those controls are complete.

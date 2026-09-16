@@ -38,6 +38,49 @@
       "license": "MIT"
     }
   },
+  "hosted_linux_native_review": {
+    "platform": "CPython 3.13.15 / Ubuntu 24.04 x86_64",
+    "exact_head_ci_run": 35147251656,
+    "river": {
+      "native_file_count": 1,
+      "native_bytes": 1208456,
+      "native_extension": "river/_river_rust.cpython-313-x86_64-linux-gnu.so",
+      "native_extension_sha256": "ec674139a52d24c18bb395e4a6cf12909f0b1e5ae42c55f927947538c7944d55",
+      "native_manifest_sha256": "35c08b65cee65068b30bac491fd252938438e0f4df53a2824935cb30a4d69d10",
+      "unresolved_dynamic_dependencies": []
+    },
+    "narwhals": {
+      "native_file_count": 0,
+      "native_manifest_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "unresolved_dynamic_dependencies": []
+    },
+    "numpy": {
+      "native_file_count": 22,
+      "native_bytes": 45576366,
+      "native_manifest_sha256": "9d5d7cfd6f7662443b052628b7d490cc59181ed102982b9bd0dc3c443930bf64",
+      "unresolved_dynamic_dependencies": []
+    },
+    "scipy": {
+      "native_file_count": 114,
+      "native_bytes": 82446698,
+      "native_manifest_sha256": "a60e7dc681ddde428b7f4b1d98bb6e740786de783db002e716ea6b8ae5fda17e",
+      "bundled_dependency_resolutions": [
+        "libquadmath-828275a7.so.0.0.0"
+      ],
+      "unresolved_dynamic_dependencies": []
+    },
+    "rss_smoke": {
+      "scope": "hosted_linux_synthetic_native_rss_smoke_only",
+      "warmup_seed": 7,
+      "seeds": [19, 31, 43, 59, 71],
+      "samples_per_seed": 600,
+      "baseline_rss_kib": 169872,
+      "observed_rss_kib": [169876, 169876, 169876, 169876, 169876],
+      "max_growth_kib": 4,
+      "final_growth_kib": 4,
+      "production_memory_qualified": false
+    }
+  },
   "controls": {
     "synthetic_only": true,
     "fixed_model_family": true,
@@ -55,16 +98,32 @@
   "artifact_review": {
     "exact_hosted_wheel_digest_captured": true,
     "pypi_provenance_attestation_captured": true,
+    "hosted_linux_native_inventory_complete": true,
+    "hosted_linux_native_rss_smoke_complete": true,
     "native_library_inventory_complete": false,
     "sbom_complete": false,
     "notices_complete": false,
     "vulnerability_review_complete": false,
+    "platform_review_complete": false,
     "commercial_distribution_approved": false
+  },
+  "failure_accounting": {
+    "native_audit_first_attempt_failure": {
+      "classification": "implementation_audit_logic",
+      "unchanged_retry": false,
+      "root_cause": "wheel-local shared library was misclassified as externally unresolved when inspected standalone",
+      "regression_added": true,
+      "corrected_exact_head": "cacb7d861691cf7e4a4fd5b2185b9fb84320bacc",
+      "corrected_ci_run": 35147251656,
+      "corrected_ci_passed": true
+    }
   },
   "notes": [
     "The Linux CPython 3.13 River wheel recorded here is the exact filename selected by hosted CI.",
     "PyPI attests that this River wheel was published from the recorded upstream tag commit.",
-    "Artifact digest capture is not native-library, SBOM, notice, vulnerability, or distribution approval.",
+    "Hosted Linux native inventory is exact for the installed runtime but is not cross-platform release-bundle approval.",
+    "The RSS smoke includes process-native allocations at OS RSS granularity but is not production memory qualification or allocation attribution.",
+    "Artifact digest capture is not SBOM, notice, vulnerability, or distribution approval.",
     "The checkpoint envelope digest detects accidental corruption; it does not authenticate an untrusted writer.",
     "Candidate acceptance is separate from release approval.",
     "Scores are not claimed to be calibrated probabilities.",
