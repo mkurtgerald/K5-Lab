@@ -13,7 +13,8 @@ FORBIDDEN_SUFFIXES = {".pt", ".pth", ".onnx", ".safetensors", ".pkl", ".pickle",
  ".mp4", ".avi", ".mov", ".jpg", ".jpeg", ".png", ".wav", ".npy", ".npz", ".parquet", ".db", ".zip"}
 ALLOWED_TOP = {"src", "tests", "tools", "docs", "provenance", ".github"}
 ALLOWED_ROOT = {"README.md", "LICENSE", "AGENTS.md", "SECURITY.md", "THIRD_PARTY.md",
- ".gitignore", "pyproject.toml", "requirements-core.txt", "requirements-neural.txt"}
+ ".gitignore", "pyproject.toml", "requirements-core.txt", "requirements-neural.txt",
+ "requirements-s3-runtime.txt"}
 TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]*")
 IP_RE = re.compile(r"(?<![0-9.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9.])")
 

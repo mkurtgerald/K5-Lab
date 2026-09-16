@@ -30,6 +30,16 @@ class PublicationTests(unittest.TestCase):
         with tmp:
             (root/"README.md").write_text("rt"+"sp://example.invalid")
             self.assertTrue(any("endpoint" in e for e in scan(root)))
+    def test_s3_runtime_manifest_is_an_explicit_public_root_file(self):
+        tmp,root=self.fixture()
+        with tmp:
+            (root/"requirements-s3-runtime.txt").write_text("stable-baselines3==2.9.0\n")
+            self.assertEqual(scan(root), [])
+    def test_unknown_root_file_remains_blocked(self):
+        tmp,root=self.fixture()
+        with tmp:
+            (root/"requirements-unreviewed.txt").write_text("example==1.0\n")
+            self.assertTrue(any("unapproved path" in e for e in scan(root)))
     def test_release_not_approved(self):
         doc=json.loads((ROOT/"provenance/components.json").read_text())
         self.assertGreater(len(blockers(doc)),0)
