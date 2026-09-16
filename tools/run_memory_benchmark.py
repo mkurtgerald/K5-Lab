@@ -21,12 +21,11 @@ def percentile(values: list[float], fraction: float) -> float:
     return ordered[index]
 
 
-def run(samples: int) -> dict[str, object]:
-    if not 32 <= samples <= 2000:
-        raise ValueError("samples must be between 32 and 2000")
+def _populate(samples: int) -> tuple[BoundedEventMemory, list[float], float]:
     base = datetime(2026, 1, 1, tzinfo=timezone.utc)
     memory = BoundedEventMemory(
         max_events_per_partition=samples,
+        max_partitions=1,
         max_age_seconds=float(samples + 120),
         max_query_window_seconds=120.0,
     )
@@ -50,6 +49,14 @@ def run(samples: int) -> dict[str, object]:
         insert_ms.append((perf_counter() - started) * 1000.0)
     _, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
+    return memory, insert_ms, peak_bytes / 1024.0
+
+
+def run(samples: int) -> dict[str, object]:
+    if not 32 <= samples <= 2000:
+        raise ValueError("samples must be between 32 and 2000")
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    memory, insert_ms, peak_kib = _populate(samples)
 
     end = base + timedelta(seconds=samples - 1)
     start = end - timedelta(seconds=60)
@@ -82,11 +89,24 @@ def run(samples: int) -> dict[str, object]:
     assert receipt is not None
     if receipt.authorized or receipt.external_actions:
         raise RuntimeError("correlation receipt violated non-authorizing contract")
-    if memory.resident_count("partition_a") > samples:
+    if memory.resident_count("partition_a") > samples or memory.resident_count() > samples:
         raise RuntimeError("memory exceeded configured count bound")
+
+    scaling = []
+    for bound in sorted({max(32, samples // 4), max(32, samples // 2), samples}):
+        scaled, _, scaled_peak_kib = _populate(bound)
+        scaling.append(
+            {
+                "configured_max_events": bound,
+                "resident_count": scaled.resident_count(),
+                "python_peak_kib": round(scaled_peak_kib, 3),
+            }
+        )
 
     return {
         "samples": samples,
+        "configured_max_events": samples,
+        "max_partitions": 1,
         "resident_count": memory.resident_count("partition_a"),
         "query_count": query_count,
         "insert_p50_ms": round(percentile(insert_ms, 0.50), 6),
@@ -95,7 +115,8 @@ def run(samples: int) -> dict[str, object]:
         "query_p95_ms": round(percentile(query_ms, 0.95), 6),
         "correlate_p50_ms": round(percentile(correlate_ms, 0.50), 6),
         "correlate_p95_ms": round(percentile(correlate_ms, 0.95), 6),
-        "python_peak_kib": round(peak_bytes / 1024.0, 3),
+        "python_peak_kib": round(peak_kib, 3),
+        "capacity_scaling": scaling,
         "authorized": False,
         "external_actions": 0,
         "correlation_id": receipt.correlation_id,
@@ -106,4 +127,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", type=int, default=512)
     args = parser.parse_args()
-    print(json.dumps(run(args.samples), sort_keys=True, separators=(",", ":")))
+    print(
+        json.dumps(
+            run(args.samples), sort_keys=True, separators=(",", ":")
+        )
+    )

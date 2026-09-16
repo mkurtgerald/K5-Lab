@@ -11,6 +11,7 @@ from .contracts import token, unit_score, utc
 MAX_PARENTS = 32
 MAX_CORRELATION_EVENTS = 32
 MAX_EVENTS_LIMIT = 10_000
+MAX_PARTITIONS_LIMIT = 1_024
 MAX_AGE_LIMIT_SECONDS = 31_536_000.0
 
 
@@ -97,6 +98,7 @@ class BoundedEventMemory:
         self,
         *,
         max_events_per_partition: int = 512,
+        max_partitions: int = 64,
         max_age_seconds: float = 3600.0,
         max_query_window_seconds: float = 600.0,
     ) -> None:
@@ -104,6 +106,10 @@ class BoundedEventMemory:
             raise ValueError("max_events_per_partition must be an integer")
         if not 1 <= max_events_per_partition <= MAX_EVENTS_LIMIT:
             raise ValueError("max_events_per_partition out of range")
+        if isinstance(max_partitions, bool) or not isinstance(max_partitions, int):
+            raise ValueError("max_partitions must be an integer")
+        if not 1 <= max_partitions <= MAX_PARTITIONS_LIMIT:
+            raise ValueError("max_partitions out of range")
         max_age = _positive_bound(
             max_age_seconds, name="max_age_seconds", maximum=MAX_AGE_LIMIT_SECONDS
         )
@@ -115,6 +121,7 @@ class BoundedEventMemory:
         if max_query > max_age:
             raise ValueError("query window cannot exceed retention age")
         self.max_events_per_partition = max_events_per_partition
+        self.max_partitions = max_partitions
         self.max_age_seconds = max_age
         self.max_query_window_seconds = max_query
         self._events: dict[str, dict[str, StoredEvent]] = {}
@@ -125,6 +132,22 @@ class BoundedEventMemory:
     def _sort_key(entry: StoredEvent) -> tuple[datetime, int, str]:
         return (utc(entry.event.event_at), entry.ingest_seq, entry.event.event_id)
 
+    @staticmethod
+    def _dependent_closure(
+        events: dict[str, StoredEvent], roots: set[str]
+    ) -> set[str]:
+        doomed = set(roots)
+        changed = True
+        while changed:
+            changed = False
+            for event_id, entry in events.items():
+                if event_id not in doomed and any(
+                    parent in doomed for parent in entry.event.parents
+                ):
+                    doomed.add(event_id)
+                    changed = True
+        return doomed
+
     def _prospective_watermark(self, event: Event) -> datetime:
         event_time = utc(event.event_at)
         current = self._watermarks.get(event.partition)
@@ -133,6 +156,9 @@ class BoundedEventMemory:
     def append(self, event: Event) -> StoredEvent:
         if not isinstance(event, Event):
             raise ValueError("Event instance required")
+        known_partition = event.partition in self._events
+        if not known_partition and len(self._events) >= self.max_partitions:
+            raise ValueError("partition capacity exhausted")
         partition = self._events.get(event.partition, {})
         existing = partition.get(event.event_id)
         if existing is not None:
@@ -146,15 +172,30 @@ class BoundedEventMemory:
         if event_time < cutoff:
             raise ValueError("event falls outside retention window")
 
+        expired = {
+            event_id
+            for event_id, entry in partition.items()
+            if utc(entry.event.event_at) < cutoff
+        }
+        doomed = self._dependent_closure(partition, expired) if expired else set()
+
         for parent in event.parents:
             parent_entry = partition.get(parent)
-            if parent_entry is None or utc(parent_entry.event.event_at) < cutoff:
+            if parent_entry is None or parent in doomed:
                 raise MissingReference("provenance reference is not resident")
 
-        if len(partition) >= self.max_events_per_partition:
-            oldest = min(partition.values(), key=self._sort_key)
+        if len(partition) - len(doomed) >= self.max_events_per_partition:
+            survivors = [
+                entry for event_id, entry in partition.items() if event_id not in doomed
+            ]
+            oldest = min(survivors, key=self._sort_key)
             if event_time < utc(oldest.event.event_at):
                 raise ValueError("late event would fall outside count bound")
+            count_doomed = self._dependent_closure(
+                partition, {oldest.event.event_id}
+            )
+            if any(parent in count_doomed for parent in event.parents):
+                raise MissingReference("provenance would be evicted by count bound")
 
         stored = StoredEvent(event=event, ingest_seq=self._next_seq)
         self._next_seq += 1
@@ -164,22 +205,30 @@ class BoundedEventMemory:
         self._evict(event.partition)
         return stored
 
+    def _drop_with_dependents(self, partition: str, roots: set[str]) -> None:
+        events = self._events.get(partition)
+        if not events or not roots:
+            return
+        doomed = self._dependent_closure(events, roots)
+        for event_id in doomed:
+            events.pop(event_id, None)
+
     def _evict(self, partition: str) -> None:
         events = self._events.get(partition)
         if not events:
             return
         watermark = self._watermarks[partition]
         cutoff = watermark - timedelta(seconds=self.max_age_seconds)
-        expired = [
+        expired = {
             event_id
             for event_id, entry in events.items()
             if utc(entry.event.event_at) < cutoff
-        ]
-        for event_id in expired:
-            del events[event_id]
+        }
+        self._drop_with_dependents(partition, expired)
+        events = self._events[partition]
         while len(events) > self.max_events_per_partition:
             oldest = min(events.values(), key=self._sort_key)
-            del events[oldest.event.event_id]
+            self._drop_with_dependents(partition, {oldest.event.event_id})
 
     def get(self, partition: str, event_id: str) -> StoredEvent:
         token(partition)
@@ -210,7 +259,11 @@ class BoundedEventMemory:
             token(entity_key)
         if event_type is not None:
             token(event_type)
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= self.max_events_per_partition:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= self.max_events_per_partition
+        ):
             raise ValueError("query limit out of range")
 
         rows = []
@@ -275,6 +328,9 @@ class BoundedEventMemory:
             return sum(len(events) for events in self._events.values())
         token(partition)
         return len(self._events.get(partition, {}))
+
+    def partition_count(self) -> int:
+        return len(self._events)
 
     def snapshot_signature(self, partition: str) -> tuple[tuple[int, str], ...]:
         token(partition)
