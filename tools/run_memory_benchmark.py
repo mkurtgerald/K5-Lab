@@ -10,7 +10,7 @@ from time import perf_counter
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mosaic_lab.memory import BoundedEventMemory, Event
+from mosaic_lab.memory import BoundedEventMemory, Event, MissingReference
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -50,6 +50,11 @@ def _populate(samples: int) -> tuple[BoundedEventMemory, list[float], float]:
     _, peak_bytes = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     return memory, insert_ms, peak_bytes / 1024.0
+
+
+def _ops_per_second(values: list[float]) -> float:
+    seconds = sum(values) / 1000.0
+    return round(len(values) / seconds, 3) if seconds > 0 else 0.0
 
 
 def run(samples: int) -> dict[str, object]:
@@ -103,6 +108,115 @@ def run(samples: int) -> dict[str, object]:
             }
         )
 
+    overflow = BoundedEventMemory(
+        max_events_per_partition=32,
+        max_partitions=1,
+        max_age_seconds=1000,
+        max_query_window_seconds=120,
+    )
+    for index in range(64):
+        stamp = base + timedelta(seconds=index)
+        overflow.append(
+            Event(
+                "partition_b",
+                f"ov_{index}",
+                "entity_a",
+                "type_a",
+                "source_a",
+                stamp,
+                stamp,
+                0.75,
+            )
+        )
+    eviction_ok = overflow.resident_count("partition_b") == 32
+    if not eviction_ok:
+        raise RuntimeError("count eviction failed to preserve bound")
+
+    replay = []
+    for _ in range(2):
+        probe = BoundedEventMemory(
+            max_events_per_partition=8,
+            max_partitions=1,
+            max_age_seconds=120,
+            max_query_window_seconds=60,
+        )
+        for index in (2, 1, 3):
+            stamp = base + timedelta(seconds=index)
+            probe.append(
+                Event(
+                    "partition_r",
+                    f"rp_{index}",
+                    "entity_a",
+                    "type_a",
+                    "source_a",
+                    stamp,
+                    stamp,
+                    0.75,
+                )
+            )
+        replay.append(
+            (
+                probe.snapshot_signature("partition_r"),
+                probe.correlate(
+                    partition="partition_r",
+                    event_ids=("rp_1", "rp_3"),
+                    window_seconds=10,
+                ).correlation_id,
+            )
+        )
+    replay_match = replay[0] == replay[1]
+    if not replay_match:
+        raise RuntimeError("deterministic replay mismatch")
+
+    expected_negative_paths = {}
+    try:
+        memory.get("partition_a", "missing")
+    except MissingReference:
+        expected_negative_paths["missing_reference"] = True
+    try:
+        memory.get("partition_other", "ev_0")
+    except MissingReference:
+        expected_negative_paths["cross_partition_reference"] = True
+    try:
+        memory.query(
+            partition="partition_a", start=end - timedelta(seconds=121), end=end
+        )
+    except ValueError:
+        expected_negative_paths["oversized_query_window"] = True
+    try:
+        memory.correlate(
+            partition="partition_a",
+            event_ids=("ev_0", "missing"),
+            window_seconds=10,
+        )
+    except MissingReference:
+        expected_negative_paths["correlation_missing_reference"] = True
+    late_stamp = base - timedelta(seconds=1000)
+    try:
+        memory.append(
+            Event(
+                "partition_a",
+                "late_probe",
+                "entity_a",
+                "type_a",
+                "source_a",
+                late_stamp,
+                late_stamp,
+                0.75,
+            )
+        )
+    except ValueError:
+        expected_negative_paths["too_late_event"] = True
+    required = {
+        "missing_reference",
+        "cross_partition_reference",
+        "oversized_query_window",
+        "correlation_missing_reference",
+        "too_late_event",
+    }
+    if set(expected_negative_paths) != required:
+        raise RuntimeError("expected negative-path observation incomplete")
+
     return {
         "samples": samples,
         "configured_max_events": samples,
@@ -115,8 +229,14 @@ def run(samples: int) -> dict[str, object]:
         "query_p95_ms": round(percentile(query_ms, 0.95), 6),
         "correlate_p50_ms": round(percentile(correlate_ms, 0.50), 6),
         "correlate_p95_ms": round(percentile(correlate_ms, 0.95), 6),
+        "insert_ops_per_second": _ops_per_second(insert_ms),
+        "query_ops_per_second": _ops_per_second(query_ms),
+        "correlate_ops_per_second": _ops_per_second(correlate_ms),
         "python_peak_kib": round(peak_kib, 3),
         "capacity_scaling": scaling,
+        "eviction_bound_preserved": eviction_ok,
+        "deterministic_replay": replay_match,
+        "expected_negative_paths": expected_negative_paths,
         "authorized": False,
         "external_actions": 0,
         "correlation_id": receipt.correlation_id,
@@ -127,8 +247,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", type=int, default=512)
     args = parser.parse_args()
-    print(
-        json.dumps(
-            run(args.samples), sort_keys=True, separators=(",", ":")
-        )
-    )
+    print(json.dumps(run(args.samples), sort_keys=True, separators=(",", ":")))

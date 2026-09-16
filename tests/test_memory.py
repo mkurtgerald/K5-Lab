@@ -235,6 +235,23 @@ class MemoryTests(unittest.TestCase):
                 partition="p1", event_ids=("e1", "e1"), window_seconds=1
             )
 
+    def test_replay_is_deterministic_across_fresh_instances(self):
+        signatures = []
+        correlations = []
+        for _ in range(2):
+            memory = BoundedEventMemory(max_events_per_partition=8, max_partitions=1)
+            memory.append(event("e2", offset=2))
+            memory.append(event("e1", offset=1))
+            memory.append(event("e3", offset=3))
+            signatures.append(memory.snapshot_signature("p1"))
+            correlations.append(
+                memory.correlate(
+                    partition="p1", event_ids=("e1", "e3"), window_seconds=10
+                ).correlation_id
+            )
+        self.assertEqual(signatures[0], signatures[1])
+        self.assertEqual(correlations[0], correlations[1])
+
     def test_memory_never_exceeds_total_configured_bound(self):
         memory = BoundedEventMemory(max_events_per_partition=8, max_partitions=4)
         for partition_index in range(4):
