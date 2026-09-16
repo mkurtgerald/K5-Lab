@@ -26,8 +26,10 @@ The River 0.26.1 source explicitly exposes `StandardScaler` running state and th
 
 The stage adds an in-memory drift fixture and prequential benchmark. A River learner is compared with a frozen scikit-learn logistic baseline trained only on an early stationary window. Reported evidence includes post-drift balanced accuracy, mean squared score error, abstention rate, drift-detection indexes, p50/p95 per-update latency, bounded source/update counts, exact installed package versions, and a wrapper-state receipt.
 
+A separate multi-seed acceptance sweep fixes the abstention margin at 0.04 and evaluates five independent synthetic seeds rather than selecting a favorable seed. The initial regression envelope requires at least 75% answered coverage, at most 25% answered false-positive and false-negative rates, and at most 0.20 selective mean-squared score error for every included seed. These are S2 synthetic regression floors, not production accuracy targets.
+
 The fixture is synthetic and generic. It is not evidence of real-world sensor intelligence, calibration, safety, or production quality. No production weights or input records are saved.
 
 ## Remaining S2 exit work
 
-Before S2 can close, the candidate still requires exact hosted artifact/native-library capture, stronger multi-seed held-out drift assertions, explicit memory-growth/native-allocation review, and exact-head CI on the complete S2 acceptance set. Commercial distribution remains false until SBOM/notices/vulnerability/platform review is complete.
+Before S2 can close, the candidate still requires exact hosted artifact/native-library capture, explicit native-allocation/memory-growth review, and exact-head CI on the complete S2 acceptance set. Commercial distribution remains false until SBOM/notices/vulnerability/platform review is complete.
