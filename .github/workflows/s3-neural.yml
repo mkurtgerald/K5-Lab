@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 15
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: src
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
     steps:
