@@ -40,5 +40,7 @@ jobs:
         run: python tools/run_stream_quality.py --samples 600
       - name: Streaming multi-seed acceptance
         run: python tools/run_stream_multiseed.py --samples 600
+      - name: Streaming robustness observation
+        run: python tools/run_stream_robustness.py --samples 600 --seed 31
       - name: Native runtime inventory and RSS smoke
         run: python tools/run_native_inventory.py
