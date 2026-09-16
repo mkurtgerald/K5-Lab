@@ -12,7 +12,7 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       PYTHONDONTWRITEBYTECODE: "1"
       OPENBLAS_NUM_THREADS: "1"
@@ -32,3 +32,5 @@ jobs:
         run: python tools/run_tests.py
       - name: Synthetic baseline smoke
         run: python tools/run_benchmark.py --samples 600
+      - name: Constrained allocation smoke
+        run: python tools/run_allocation_benchmark.py
