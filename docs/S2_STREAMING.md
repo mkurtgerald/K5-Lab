@@ -6,7 +6,9 @@ Status: evaluation candidate only. This stage does not approve commercial distri
 
 River 0.26.1 is the first incremental-learning donor evaluated for S2. The upstream tag `0.26.1` resolves to commit `64285b9dd6c606804753235fe992bcf25b9856ee`. Upstream metadata declares BSD-3-Clause and Python >=3.11. Its core dependency constraints are SciPy >=1.14.1,<2, NumPy >=2.2.5,<3, and Narwhals >=2.0.0. The package is built with Maturin and includes a Rust extension; therefore source-license review is not binary-bundle approval.
 
-The candidate pins River 0.26.1 and Narwhals 2.26.0 alongside the already pinned NumPy/SciPy runtime. Narwhals is MIT. Exact downloaded River wheel/native-library inventory and distribution notices remain release-review work.
+The candidate pins River 0.26.1 and Narwhals 2.26.0 alongside the already pinned NumPy/SciPy runtime. Narwhals is MIT.
+
+Hosted Linux CI selects `river-0.26.1-cp313-cp313-manylinux_2_28_x86_64.whl`. Its PyPI SHA-256 is `7d8e6aa749f06e6bd71835ef722c14627bbb049f6929f5bc0d8a65dcd813ad4b`; PyPI Trusted Publishing provenance identifies upstream tag `0.26.1` at commit `64285b9dd6c606804753235fe992bcf25b9856ee`. The selected Narwhals wheel SHA-256 is also recorded in `provenance/s2-streaming.json`. Digest/provenance capture does not approve the embedded native bundle for distribution; native-library inventory, notices, SBOM, vulnerability and platform review remain open.
 
 ## Adapter boundary
 
@@ -32,4 +34,4 @@ The fixture is synthetic and generic. It is not evidence of real-world sensor in
 
 ## Remaining S2 exit work
 
-Before S2 can close, the candidate still requires exact hosted artifact/native-library capture, explicit native-allocation/memory-growth review, and exact-head CI on the complete S2 acceptance set. Commercial distribution remains false until SBOM/notices/vulnerability/platform review is complete.
+Before S2 can close, the candidate still requires native-library inventory, explicit native-allocation/memory-growth review, SBOM/notices/vulnerability/platform review, and exact-head CI on the complete S2 acceptance set. Commercial distribution remains false until release review is complete.

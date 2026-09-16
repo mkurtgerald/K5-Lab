@@ -22,6 +22,22 @@
     "numpy": "2.3.5",
     "scipy": "1.17.0"
   },
+  "hosted_linux_artifacts": {
+    "river": {
+      "filename": "river-0.26.1-cp313-cp313-manylinux_2_28_x86_64.whl",
+      "sha256": "7d8e6aa749f06e6bd71835ef722c14627bbb049f6929f5bc0d8a65dcd813ad4b",
+      "pypi_upload_date": "2026-08-21",
+      "trusted_publishing": true,
+      "attested_source_commit": "64285b9dd6c606804753235fe992bcf25b9856ee",
+      "attested_source_tag": "0.26.1",
+      "sigstore_transparency_entry": "2550449317"
+    },
+    "narwhals": {
+      "filename": "narwhals-2.26.0-py3-none-any.whl",
+      "sha256": "29326d74f107c347fd1009bd58e38d9f7c7c5b51e6de97bc93dbc325d9038b54",
+      "license": "MIT"
+    }
+  },
   "controls": {
     "synthetic_only": true,
     "fixed_model_family": true,
@@ -31,12 +47,14 @@
     "bounded_updates": 100000,
     "max_features": 32,
     "remote_access": false,
-    "persistence_exposed": false,
+    "checkpoint_codec_exposed": true,
+    "authenticated_checkpoint_storage_provided": false,
     "external_actions": false,
     "authorization": false
   },
   "artifact_review": {
-    "exact_hosted_wheel_digest_captured": false,
+    "exact_hosted_wheel_digest_captured": true,
+    "pypi_provenance_attestation_captured": true,
     "native_library_inventory_complete": false,
     "sbom_complete": false,
     "notices_complete": false,
@@ -44,8 +62,12 @@
     "commercial_distribution_approved": false
   },
   "notes": [
+    "The Linux CPython 3.13 River wheel recorded here is the exact filename selected by hosted CI.",
+    "PyPI attests that this River wheel was published from the recorded upstream tag commit.",
+    "Artifact digest capture is not native-library, SBOM, notice, vulnerability, or distribution approval.",
+    "The checkpoint envelope digest detects accidental corruption; it does not authenticate an untrusted writer.",
     "Candidate acceptance is separate from release approval.",
     "Scores are not claimed to be calibrated probabilities.",
-    "No donor source or trained artifact is vendored."
+    "No donor source or production trained artifact is vendored."
   ]
 }
