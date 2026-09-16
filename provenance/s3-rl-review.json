@@ -1,0 +1,186 @@
+{
+  "stage": "S3",
+  "candidate": "learned-proposal-runtime-review",
+  "review_date": "2026-09-16",
+  "stable_baselines3": {
+    "version": "2.9.0",
+    "license": "MIT",
+    "python": ">=3.10",
+    "source_tag": "v2.9.0",
+    "source_commit": "8908708f10c8ff29759c67f55c8acb56cab27463",
+    "wheel": "stable_baselines3-2.9.0-py3-none-any.whl",
+    "wheel_sha256": "95f39a473dce081d1abe31acaf7cee446dcf223dcd74093d6ea460bc37e2e748",
+    "trusted_publishing": true,
+    "declared_runtime_requirements": [
+      "gymnasium>=0.29.1,<2.0",
+      "numpy>=1.20,<3.0",
+      "torch>=2.8,<3.0",
+      "cloudpickle"
+    ]
+  },
+  "torch": {
+    "version": "2.14.0",
+    "source_tag": "v2.14.0",
+    "source_commit": "2b3ec34829036a65cd9d1398ea72a0167dc37470",
+    "python": ">=3.10",
+    "project_license_expression": "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT",
+    "evaluated_runtime": "2.14.0+cpu",
+    "linux_cp313_cpu_wheel": "torch-2.14.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl",
+    "linux_cp313_cpu_wheel_size_bytes": 196253940,
+    "linux_cp313_cpu_wheel_sha256": "160e1bc46aeded3111d2801f8ae10dc9a1b946843a7e126b4dbf5e19c5706e95",
+    "artifact_digest_status": "captured from exact downloaded CPU wheel in GitHub Actions run 35163099959",
+    "non_cpu_pypi_wheel_reviewed_but_not_used": {
+      "wheel": "torch-2.14.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+      "sha256": "84bf384779a10c02fc3c6bdbab71a9cb66b0dd93c652d1ed5d6dfc0cb37e5962",
+      "size_mb": 554.6
+    }
+  },
+  "observed_cpu_runtime_transitives": {
+    "filelock": {
+      "version": "3.32.3",
+      "license": "MIT"
+    },
+    "fsspec": {
+      "version": "2026.7.0",
+      "license": "BSD-3-Clause"
+    },
+    "jinja2": {
+      "version": "3.1.6",
+      "license": "BSD-3-Clause"
+    },
+    "markupsafe": {
+      "version": "3.0.3",
+      "license": "BSD-3-Clause"
+    },
+    "mpmath": {
+      "version": "1.3.0",
+      "license": "New BSD / BSD"
+    },
+    "networkx": {
+      "version": "3.6.1",
+      "license": "BSD-3-Clause"
+    },
+    "setuptools": {
+      "version": "78.1.0",
+      "license": "MIT"
+    },
+    "sympy": {
+      "version": "1.14.0",
+      "license": "BSD"
+    },
+    "typing_extensions_from_core": {
+      "version": "4.16.0",
+      "license": "PSF-2.0"
+    }
+  },
+  "native_inventory": {
+    "platform": "ubuntu-24.04 / CPython 3.13",
+    "exact_head_evidence_run": 35163099959,
+    "object_count": 12,
+    "objects": [
+      {
+        "path": "_C.cpython-313-x86_64-linux-gnu.so",
+        "sha256": "20a9490e08319a3aa832989e3f2ae29e255e749e2ab1a7ce632ab4ee05334f33",
+        "size_bytes": 10721
+      },
+      {
+        "path": "lib/libaoti_custom_ops.so",
+        "sha256": "2ad7760f3067c3e9f5daa1374c9e766742aa1ee29f8f698d939e29afe3893864",
+        "size_bytes": 370488
+      },
+      {
+        "path": "lib/libbackend_with_compiler.so",
+        "sha256": "2d9b142b3a23fa5b27b0e0e0685e4d3fb089b0512f3928fa4fc830733be5e68d",
+        "size_bytes": 261384
+      },
+      {
+        "path": "lib/libc10.so",
+        "sha256": "9c142dbe5f1c5291e57605586bf22eaa07cd27da720825b1cf02fc2f6eb8047e",
+        "size_bytes": 1553824
+      },
+      {
+        "path": "lib/libgomp.so.1",
+        "sha256": "dcb9bd5cc517b0a23cf5923864abeee11ee00ba11abe9b3089388f50f7ba4628",
+        "size_bytes": 2115417
+      },
+      {
+        "path": "lib/libjitbackend_test.so",
+        "sha256": "c9abfe6eabdf5e70e9d8f0e8a83395a5d79b8dfe7d94379f68bcfa1666fbc91e",
+        "size_bytes": 213776
+      },
+      {
+        "path": "lib/libshm.so",
+        "sha256": "7846821a00be2750f0c718c69396bd3c3e54924d52ecce347ab610ee9079149a",
+        "size_bytes": 41328
+      },
+      {
+        "path": "lib/libtorch.so",
+        "sha256": "28b3d3926e0674eda7dcdf26c27dfd05cb455d681d11cb84fdbf7e0df72f3f7b",
+        "size_bytes": 8032
+      },
+      {
+        "path": "lib/libtorch_cpu.so",
+        "sha256": "936ea2f756dacab248a65399082952e077a1a579c679695201b64d5b3c95aec1",
+        "size_bytes": 438232064
+      },
+      {
+        "path": "lib/libtorch_global_deps.so",
+        "sha256": "2e5d497259a62960d95f4a7719abaeb24745429b49ffdf58e67672140205eb99",
+        "size_bytes": 8264
+      },
+      {
+        "path": "lib/libtorch_python.so",
+        "sha256": "6d8cc1c2fc79ad5864856c8bbe51bd3aaa2e2bf50df6e4327baa10514963903a",
+        "size_bytes": 32689712
+      },
+      {
+        "path": "lib/libtorchbind_test.so",
+        "sha256": "f9bc71ab25c48b9e38de2523e40a7c31f989d9ddd09d6777116572eefff4e141",
+        "size_bytes": 918152
+      }
+    ],
+    "pip_check": "clean",
+    "cuda_available": false,
+    "release_native_bundle_review_complete": false
+  },
+  "integration_contract": {
+    "project_owned_policy_adapter": true,
+    "single_action_only": true,
+    "invalid_output_fallback": "noop",
+    "predictor_exception_fallback": "noop",
+    "prohibited_action_fallback": "noop",
+    "authorization": false,
+    "external_actions": false,
+    "network_access": false,
+    "persistence_enabled": false
+  },
+  "execution_plan": {
+    "core_requirements_modified": false,
+    "core_ci_install_enabled": false,
+    "cpu_only": true,
+    "gpu_enabled": false,
+    "paid_compute": false,
+    "remote_tracking": false,
+    "training_started": true,
+    "training_algorithm": "DQN",
+    "training_seed": 41,
+    "acceptance_seeds": [
+      101,
+      103,
+      107,
+      109,
+      113
+    ],
+    "training_timesteps": 8192,
+    "saved_policy": false
+  },
+  "release_review": {
+    "s3_candidate_artifact_and_native_inventory_complete": true,
+    "native_bundle_review_complete": false,
+    "transitive_sbom_complete": false,
+    "notices_complete": false,
+    "vulnerability_review_complete": false,
+    "target_platform_review_complete": false,
+    "commercial_distribution_approved": false
+  }
+}

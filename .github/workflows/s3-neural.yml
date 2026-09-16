@@ -1,0 +1,230 @@
+name: S3 isolated learned-policy check
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/s3-neural.yml"
+      - "src/mosaic_lab/simulation.py"
+      - "src/mosaic_lab/policy_adapter.py"
+      - "provenance/s3-rl-review.json"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: s3-neural-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  learned-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONPATH: src
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - name: Publication boundary
+        run: python tools/check_public.py --index
+      - name: Install exact core versions
+        run: python -m pip install --disable-pip-version-check -r requirements-core.txt
+      - name: Install exact CPU PyTorch
+        run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu "torch==2.14.0+cpu"
+      - name: Install exact Stable-Baselines3
+        run: python -m pip install --disable-pip-version-check --no-deps "stable-baselines3==2.9.0"
+      - name: Verify isolated runtime
+        run: |
+          python - <<'PY'
+          import stable_baselines3
+          import torch
+
+          assert stable_baselines3.__version__ == "2.9.0", stable_baselines3.__version__
+          assert torch.__version__ == "2.14.0+cpu", torch.__version__
+          assert not torch.cuda.is_available(), "CPU-only lane unexpectedly exposed CUDA"
+          print({
+              "stable_baselines3": stable_baselines3.__version__,
+              "torch": torch.__version__,
+              "cuda_available": torch.cuda.is_available(),
+          })
+          PY
+      - name: Bounded learned proposal evaluation
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          from math import ceil
+          import resource
+          from statistics import mean
+          from time import perf_counter
+
+          import numpy as np
+          from stable_baselines3 import DQN
+          import torch
+
+          from mosaic_lab.policy_adapter import evaluate_policy_proposal
+          from mosaic_lab.simulation import (
+              BoundedProposalEnv,
+              allowed_actions,
+              run_baseline_episode,
+          )
+
+          TRAIN_SEED = 41
+          ACCEPTANCE_SEEDS = (101, 103, 107, 109, 113)
+          HORIZON = 64
+          TRAIN_TIMESTEPS = 8192
+          MAX_TRAIN_SECONDS = 300.0
+          MAX_RSS_DELTA_KIB = 800000
+
+          torch.set_num_threads(1)
+          torch.manual_seed(TRAIN_SEED)
+          torch.use_deterministic_algorithms(True)
+          np.random.seed(TRAIN_SEED)
+
+          train_env = BoundedProposalEnv(horizon=HORIZON)
+          rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+          started = perf_counter()
+          model = DQN(
+              "MlpPolicy",
+              train_env,
+              learning_rate=1e-3,
+              buffer_size=8192,
+              learning_starts=256,
+              batch_size=64,
+              tau=1.0,
+              gamma=0.0,
+              train_freq=1,
+              gradient_steps=1,
+              target_update_interval=256,
+              exploration_fraction=0.25,
+              exploration_initial_eps=1.0,
+              exploration_final_eps=0.02,
+              seed=TRAIN_SEED,
+              device="cpu",
+              policy_kwargs={"net_arch": [32, 32]},
+              verbose=0,
+          )
+          model.learn(total_timesteps=TRAIN_TIMESTEPS, progress_bar=False)
+          train_seconds = perf_counter() - started
+          rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+          rss_delta_kib = max(0, int(rss_after - rss_before))
+
+          if train_seconds > MAX_TRAIN_SECONDS:
+              raise RuntimeError(f"training exceeded wall-time budget: {train_seconds:.3f}s")
+          if rss_delta_kib > MAX_RSS_DELTA_KIB:
+              raise RuntimeError(f"training exceeded RSS budget: {rss_delta_kib} KiB")
+
+          def evaluate_once():
+              episodes = []
+              for seed in ACCEPTANCE_SEEDS:
+                  env = BoundedProposalEnv(horizon=HORIZON)
+                  observation, _ = env.reset(seed=seed)
+                  total_reward = 0.0
+                  latencies_ms = []
+                  fallbacks = 0
+                  accepted = 0
+                  executed_actions = []
+                  while True:
+                      permitted = allowed_actions(observation)
+
+                      def predictor(value):
+                          action, _ = model.predict(value, deterministic=True)
+                          return action
+
+                      decision_started = perf_counter()
+                      receipt = evaluate_policy_proposal(
+                          predictor,
+                          observation,
+                          allowed_actions=permitted,
+                          action_count=3,
+                          fallback_action=0,
+                      )
+                      latencies_ms.append((perf_counter() - decision_started) * 1000.0)
+                      if receipt.accepted:
+                          accepted += 1
+                      else:
+                          fallbacks += 1
+                      if receipt.authorized or receipt.external_actions:
+                          raise RuntimeError("learned proposal receipt crossed authority boundary")
+                      executed_actions.append(receipt.executed_action)
+                      observation, reward, terminated, truncated, info = env.step(receipt.executed_action)
+                      total_reward += reward
+                      if int(info["constraint_violations"]) != 0:
+                          raise RuntimeError("hard boundary permitted a prohibited simulated action")
+                      if bool(info["authorized"]) or int(info["external_actions"]) != 0:
+                          raise RuntimeError("simulation crossed authority boundary")
+                      if terminated or truncated:
+                          break
+
+                  ordered = sorted(latencies_ms)
+                  p50 = ordered[(len(ordered) - 1) // 2]
+                  p95 = ordered[max(0, ceil(0.95 * len(ordered)) - 1)]
+                  episodes.append({
+                      "seed": seed,
+                      "reward": round(total_reward, 6),
+                      "accepted": accepted,
+                      "fallbacks": fallbacks,
+                      "actions": tuple(executed_actions),
+                      "p50_inference_ms": round(p50, 6),
+                      "p95_inference_ms": round(p95, 6),
+                  })
+              return episodes
+
+          def deterministic_signature(episodes):
+              return tuple(
+                  (
+                      int(item["seed"]),
+                      float(item["reward"]),
+                      int(item["accepted"]),
+                      int(item["fallbacks"]),
+                      tuple(item["actions"]),
+                  )
+                  for item in episodes
+              )
+
+          first = evaluate_once()
+          second = evaluate_once()
+          if deterministic_signature(first) != deterministic_signature(second):
+              raise RuntimeError("deterministic learned-policy replay diverged")
+
+          learned_rewards = [float(item["reward"]) for item in first]
+          learned_p95 = [float(item["p95_inference_ms"]) for item in first]
+          total_fallbacks = sum(int(item["fallbacks"]) for item in first)
+          heuristic = [
+              run_baseline_episode(policy="heuristic", seed=seed, horizon=HORIZON)
+              for seed in ACCEPTANCE_SEEDS
+          ]
+          cp_sat = [
+              run_baseline_episode(policy="cp_sat", seed=seed, horizon=HORIZON)
+              for seed in ACCEPTANCE_SEEDS
+          ]
+          learned_mean = mean(learned_rewards)
+          heuristic_mean = mean(float(item["total_reward"]) for item in heuristic)
+          cp_sat_mean = mean(float(item["total_reward"]) for item in cp_sat)
+
+          evidence = {
+              "algorithm": "DQN",
+              "training_seed": TRAIN_SEED,
+              "acceptance_seeds": ACCEPTANCE_SEEDS,
+              "timesteps": TRAIN_TIMESTEPS,
+              "train_seconds": round(train_seconds, 6),
+              "rss_delta_kib": rss_delta_kib,
+              "learned_mean_reward": round(learned_mean, 6),
+              "heuristic_mean_reward": round(heuristic_mean, 6),
+              "cp_sat_mean_reward": round(cp_sat_mean, 6),
+              "learned_to_heuristic_ratio": round(learned_mean / heuristic_mean, 6) if heuristic_mean else None,
+              "learned_max_p95_inference_ms": round(max(learned_p95), 6),
+              "fallbacks": total_fallbacks,
+              "constraint_violations": 0,
+              "deterministic_replay": True,
+              "authorized": False,
+              "external_actions": 0,
+              "saved_policy": False,
+          }
+          if learned_mean <= 0.0:
+              raise RuntimeError(f"DQN candidate failed to improve on no-op: {evidence}")
+          print(evidence)
+          PY
