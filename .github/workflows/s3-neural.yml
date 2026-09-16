@@ -62,7 +62,7 @@ jobs:
           from time import perf_counter
 
           import numpy as np
-          from stable_baselines3 import PPO
+          from stable_baselines3 import DQN
           import torch
 
           from mosaic_lab.policy_adapter import evaluate_policy_proposal
@@ -75,7 +75,7 @@ jobs:
           TRAIN_SEED = 41
           ACCEPTANCE_SEEDS = (101, 103, 107, 109, 113)
           HORIZON = 64
-          TRAIN_TIMESTEPS = 1024
+          TRAIN_TIMESTEPS = 8192
           MAX_TRAIN_SECONDS = 300.0
           MAX_RSS_DELTA_KIB = 800000
 
@@ -87,14 +87,21 @@ jobs:
           train_env = BoundedProposalEnv(horizon=HORIZON)
           rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
           started = perf_counter()
-          model = PPO(
+          model = DQN(
               "MlpPolicy",
               train_env,
-              learning_rate=3e-4,
-              n_steps=64,
+              learning_rate=1e-3,
+              buffer_size=8192,
+              learning_starts=256,
               batch_size=64,
-              n_epochs=2,
-              gamma=0.95,
+              tau=1.0,
+              gamma=0.0,
+              train_freq=1,
+              gradient_steps=1,
+              target_update_interval=256,
+              exploration_fraction=0.25,
+              exploration_initial_eps=1.0,
+              exploration_final_eps=0.02,
               seed=TRAIN_SEED,
               device="cpu",
               policy_kwargs={"net_arch": [32, 32]},
@@ -194,16 +201,21 @@ jobs:
               run_baseline_episode(policy="cp_sat", seed=seed, horizon=HORIZON)
               for seed in ACCEPTANCE_SEEDS
           ]
+          learned_mean = mean(learned_rewards)
+          heuristic_mean = mean(float(item["total_reward"]) for item in heuristic)
+          cp_sat_mean = mean(float(item["total_reward"]) for item in cp_sat)
 
           evidence = {
+              "algorithm": "DQN",
               "training_seed": TRAIN_SEED,
               "acceptance_seeds": ACCEPTANCE_SEEDS,
               "timesteps": TRAIN_TIMESTEPS,
               "train_seconds": round(train_seconds, 6),
               "rss_delta_kib": rss_delta_kib,
-              "learned_mean_reward": round(mean(learned_rewards), 6),
-              "heuristic_mean_reward": round(mean(float(item["total_reward"]) for item in heuristic), 6),
-              "cp_sat_mean_reward": round(mean(float(item["total_reward"]) for item in cp_sat), 6),
+              "learned_mean_reward": round(learned_mean, 6),
+              "heuristic_mean_reward": round(heuristic_mean, 6),
+              "cp_sat_mean_reward": round(cp_sat_mean, 6),
+              "learned_to_heuristic_ratio": round(learned_mean / heuristic_mean, 6) if heuristic_mean else None,
               "learned_max_p95_inference_ms": round(max(learned_p95), 6),
               "fallbacks": total_fallbacks,
               "constraint_violations": 0,
@@ -212,5 +224,7 @@ jobs:
               "external_actions": 0,
               "saved_policy": False,
           }
+          if learned_mean <= 0.0:
+              raise RuntimeError(f"DQN candidate failed to improve on no-op: {evidence}")
           print(evidence)
           PY
