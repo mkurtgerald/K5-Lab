@@ -37,7 +37,8 @@
       "name": "protobuf",
       "version": "6.33.6",
       "license": "BSD-3-Clause",
-      "sha256": "77179e006c476e69bf8e8ce866640091ec42e1beb80b213c3900006ecfba6901",
+      "artifact": "cp39-abi3 manylinux2014 x86_64 wheel",
+      "sha256": "e9db7e292e0ab79dd108d7f1a94fe31601ce1ee3f7b79e0692043423020b0593",
       "distribution_approved": false
     },
     {
@@ -76,5 +77,5 @@
       "distribution_approved": false
     }
   ],
-  "native_review": "OR-Tools and pandas binary contents still require release-bundle SBOM, notices, vulnerability and platform review."
+  "native_review": "OR-Tools, pandas, and protobuf binary contents still require release-bundle SBOM, notices, vulnerability and platform review."
 }

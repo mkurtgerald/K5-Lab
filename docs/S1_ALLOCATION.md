@@ -17,8 +17,8 @@ expression, external command, network call, or effect boundary.
   `c9facdc0ff30fdb8e35bd16532026cac472a549e182c94fa201b51b25e4bf7bf`.
 - pandas 2.3.3 — BSD-3-Clause; CPython 3.13 Linux x86-64 wheel SHA-256
   `318d77e0e42a628c04dc56bcef4b40de67918f7041c2b061af1da41dcff670ac`.
-- protobuf 6.33.6 — BSD-3-Clause; pure-Python wheel SHA-256
-  `77179e006c476e69bf8e8ce866640091ec42e1beb80b213c3900006ecfba6901`.
+- protobuf 6.33.6 — BSD-3-Clause; CPython 3.9+ ABI3 manylinux2014 x86-64 wheel SHA-256
+  `e9db7e292e0ab79dd108d7f1a94fe31601ce1ee3f7b79e0692043423020b0593`.
 - typing-extensions 4.16.0 — PSF-2.0; wheel SHA-256
   `481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8`.
 - python-dateutil 2.9.0.post0 — BSD-3-Clause / Apache-2.0 contribution mix;
@@ -30,12 +30,12 @@ expression, external command, network call, or effect boundary.
 - six 1.17.0 — MIT; wheel SHA-256
   `4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274`.
 
-The OR-Tools wheel is a native binary distribution and contains or links project
-components beyond the Python CP-SAT API. Exact package versions are pinned here,
-but this experiment does not approve the native bundle for redistribution. The
-actual release bundle still requires SBOM/native-library inventory, notices,
-vulnerability review, and platform-specific verification. No external solver is
-selected or invoked by this adapter.
+The OR-Tools, pandas, and protobuf wheels selected by the Linux CPython 3.13 CI
+path include native platform code. Exact package versions and selected artifact
+digests are recorded here, but this experiment does not approve the binary bundle
+for redistribution. The actual release bundle still requires SBOM/native-library
+inventory, notices, vulnerability review, and platform-specific verification. No
+external solver is selected or invoked by this adapter.
 
 ## Determinism and bounds
 
