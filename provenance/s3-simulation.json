@@ -1,0 +1,72 @@
+{
+  "stage": "S3",
+  "candidate": "generic-simulation",
+  "review_date": "2026-09-16",
+  "donor": {
+    "name": "gymnasium",
+    "version": "1.3.0",
+    "tag": "v1.3.0",
+    "tag_commit": "53bf3e9a884783eb72ad3fc8b15780914c97c3e1",
+    "license": "MIT",
+    "python": ">=3.10",
+    "base_dependencies": [
+      "numpy>=1.21.0",
+      "cloudpickle>=1.2.0",
+      "typing-extensions>=4.3.0",
+      "farama-notifications>=0.0.1"
+    ]
+  },
+  "reviewed_artifacts": {
+    "gymnasium": {
+      "filename": "gymnasium-1.3.0-py3-none-any.whl",
+      "sha256": "6b8c159a8540dcbcb221722d7efda24d78ebbcbc3bd2ea1c2611aa2a34471fc2",
+      "trusted_publishing": false,
+      "license": "MIT"
+    },
+    "cloudpickle": {
+      "version": "3.1.2",
+      "filename": "cloudpickle-3.1.2-py3-none-any.whl",
+      "sha256": "9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a",
+      "trusted_publishing": true,
+      "license": "BSD-3-Clause",
+      "called_by_project": false
+    },
+    "farama-notifications": {
+      "version": "0.0.6",
+      "filename": "farama_notifications-0.0.6-py3-none-any.whl",
+      "sha256": "f84839188efa1ce5bb361c2a84881b2dc2c0d0d7fb661ff00421820170930935",
+      "trusted_publishing": false,
+      "license": "MIT"
+    }
+  },
+  "controls": {
+    "synthetic_only": true,
+    "versioned_contract": true,
+    "bounded_horizon": 128,
+    "observation_dimension": 5,
+    "action_count": 3,
+    "hard_constraint_filter": true,
+    "prohibited_action_fallback": "noop",
+    "authorization": false,
+    "external_actions": false,
+    "training_enabled": false,
+    "saved_policy": false,
+    "cloudpickle_load_enabled": false,
+    "remote_resources": false
+  },
+  "deferred_candidate": {
+    "name": "stable-baselines3",
+    "version": "2.9.0",
+    "license": "MIT",
+    "reason": "defer PyTorch/native/compute surface until environment and deterministic constrained baselines are green"
+  },
+  "artifact_review": {
+    "candidate_artifact_hashes_captured": true,
+    "optional_extras_enabled": false,
+    "sbom_complete": false,
+    "notices_complete": false,
+    "vulnerability_review_complete": false,
+    "platform_review_complete": false,
+    "commercial_distribution_approved": false
+  }
+}

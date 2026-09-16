@@ -20,6 +20,8 @@ are preliminary screening only; review exact distribution contents independently
 - River: https://github.com/online-ml/river
 - Narwhals: https://github.com/narwhals-dev/narwhals
 - Gymnasium: https://github.com/Farama-Foundation/Gymnasium/blob/main/LICENSE
+- cloudpickle: https://github.com/cloudpipe/cloudpickle
+- Farama-Notifications: https://github.com/Farama-Foundation/Farama-Notifications
 - Stable-Baselines3: https://github.com/DLR-RM/stable-baselines3
 - Ray: https://github.com/ray-project/ray
 - Open Policy Agent: https://github.com/open-policy-agent/opa/blob/main/LICENSE
@@ -55,6 +57,17 @@ The public adapter exposes only a fixed learner/detector boundary and synthetic
 fixtures. Exact downloaded artifact digest, native-library inventory, notices,
 SBOM, vulnerability review, and platform evidence remain required before any
 commercial redistribution approval.
+
+## S3 simulation chain
+
+The first simulation increment pins Gymnasium 1.3.0 (MIT), cloudpickle 3.1.2
+(BSD-3-Clause), and Farama-Notifications 0.0.6 (MIT), while reusing the existing
+NumPy and typing-extensions pins. No optional Gymnasium extras are enabled.
+Cloudpickle is an upstream base dependency but project code does not call its
+serialization/loading APIs. Exact reviewed wheel hashes are recorded in
+`docs/S3_SIMULATION.md` and `provenance/s3-simulation.json`. Stable-Baselines3
+and PyTorch are deliberately not yet installed; their CPU artifact/native/compute
+surface requires separate review after the environment/baseline precursor is green.
 
 ## Required release review
 

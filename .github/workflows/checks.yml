@@ -34,6 +34,8 @@ jobs:
         run: python tools/run_benchmark.py --samples 600
       - name: Constrained allocation smoke
         run: python tools/run_allocation_benchmark.py
+      - name: Generic simulation baseline
+        run: python tools/run_simulation_benchmark.py --horizon 64
       - name: Streaming drift smoke
         run: python tools/run_stream_benchmark.py --samples 600
       - name: Streaming quality smoke
