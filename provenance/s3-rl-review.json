@@ -1,0 +1,61 @@
+{
+  "stage": "S3",
+  "candidate": "learned-proposal-runtime-review",
+  "review_date": "2026-09-16",
+  "stable_baselines3": {
+    "version": "2.9.0",
+    "license": "MIT",
+    "python": ">=3.10",
+    "source_tag": "v2.9.0",
+    "source_commit": "8908708f10c8ff29759c67f55c8acb56cab27463",
+    "wheel": "stable_baselines3-2.9.0-py3-none-any.whl",
+    "wheel_sha256": "95f39a473dce081d1abe31acaf7cee446dcf223dcd74093d6ea460bc37e2e748",
+    "trusted_publishing": true,
+    "declared_runtime_requirements": [
+      "gymnasium>=0.29.1,<2.0",
+      "numpy>=1.20,<3.0",
+      "torch>=2.8,<3.0",
+      "cloudpickle"
+    ]
+  },
+  "torch": {
+    "version": "2.14.0",
+    "source_tag": "v2.14.0",
+    "source_commit": "2b3ec34829036a65cd9d1398ea72a0167dc37470",
+    "python": ">=3.10",
+    "project_license_expression": "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT",
+    "linux_cp313_wheel": "torch-2.14.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+    "linux_cp313_wheel_sha256": "84bf384779a10c02fc3c6bdbab71a9cb66b0dd93c652d1ed5d6dfc0cb37e5962",
+    "linux_cp313_wheel_size_mb": 554.6,
+    "trusted_publishing": false
+  },
+  "integration_contract": {
+    "project_owned_policy_adapter": true,
+    "single_action_only": true,
+    "invalid_output_fallback": "noop",
+    "predictor_exception_fallback": "noop",
+    "prohibited_action_fallback": "noop",
+    "authorization": false,
+    "external_actions": false,
+    "network_access": false,
+    "persistence_enabled": false
+  },
+  "execution_plan": {
+    "core_requirements_modified": false,
+    "core_ci_install_enabled": false,
+    "cpu_only": true,
+    "gpu_enabled": false,
+    "paid_compute": false,
+    "remote_tracking": false,
+    "training_started": false,
+    "reason": "review the large native runtime and project-owned fail-closed proposal boundary before isolated bounded training"
+  },
+  "release_review": {
+    "native_bundle_review_complete": false,
+    "transitive_sbom_complete": false,
+    "notices_complete": false,
+    "vulnerability_review_complete": false,
+    "target_platform_review_complete": false,
+    "commercial_distribution_approved": false
+  }
+}
