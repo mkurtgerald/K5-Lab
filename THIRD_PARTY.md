@@ -58,16 +58,29 @@ fixtures. Exact downloaded artifact digest, native-library inventory, notices,
 SBOM, vulnerability review, and platform evidence remain required before any
 commercial redistribution approval.
 
-## S3 simulation chain
+## S3 simulation and learned-proposal chain
 
-The first simulation increment pins Gymnasium 1.3.0 (MIT), cloudpickle 3.1.2
+The simulation layer pins Gymnasium 1.3.0 (MIT), cloudpickle 3.1.2
 (BSD-3-Clause), and Farama-Notifications 0.0.6 (MIT), while reusing the existing
 NumPy and typing-extensions pins. No optional Gymnasium extras are enabled.
 Cloudpickle is an upstream base dependency but project code does not call its
-serialization/loading APIs. Exact reviewed wheel hashes are recorded in
-`docs/S3_SIMULATION.md` and `provenance/s3-simulation.json`. Stable-Baselines3
-and PyTorch are deliberately not yet installed; their CPU artifact/native/compute
-surface requires separate review after the environment/baseline precursor is green.
+serialization/loading APIs.
+
+The isolated learned-proposal candidate pins Stable-Baselines3 2.9.0 (MIT) and
+PyTorch 2.14.0+cpu. Exact runtime evidence uses the CPython 3.13 Linux CPU wheel
+`torch-2.14.0+cpu-cp313-cp313-manylinux_2_28_x86_64.whl`, SHA-256
+`160e1bc46aeded3111d2801f8ae10dc9a1b946843a7e126b4dbf5e19c5706e95`.
+The observed CPU runtime transitives are filelock 3.32.3 (MIT), fsspec 2026.7.0
+(BSD-3-Clause), Jinja2 3.1.6 (BSD-3-Clause), MarkupSafe 3.0.3 (BSD-3-Clause),
+mpmath 1.3.0 (New BSD/BSD), NetworkX 3.6.1 (BSD-3-Clause), setuptools 78.1.0
+(MIT), SymPy 1.14.0 (BSD), and the existing typing-extensions 4.16.0 pin.
+
+PyTorch's installed metadata declares the composite expression
+`Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT`.
+The S3 exact-head audit enumerates and hashes the 12 native objects in the
+installed Torch package; the detailed inventory is in `provenance/s3-rl-review.json`.
+This is candidate provenance evidence only. It does not replace review of bundled
+notices, third-party native terms, vulnerabilities, or target-platform packages.
 
 ## Required release review
 
