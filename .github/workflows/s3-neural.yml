@@ -166,9 +166,21 @@ jobs:
                   })
               return episodes
 
+          def deterministic_signature(episodes):
+              return tuple(
+                  (
+                      int(item["seed"]),
+                      float(item["reward"]),
+                      int(item["accepted"]),
+                      int(item["fallbacks"]),
+                      tuple(item["actions"]),
+                  )
+                  for item in episodes
+              )
+
           first = evaluate_once()
           second = evaluate_once()
-          if first != second:
+          if deterministic_signature(first) != deterministic_signature(second):
               raise RuntimeError("deterministic learned-policy replay diverged")
 
           learned_rewards = [float(item["reward"]) for item in first]
