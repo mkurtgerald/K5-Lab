@@ -12,6 +12,7 @@ license-files = ["LICENSE"]
 dependencies = [
   "rdflib==7.6.0",
   "pyshacl==0.40.1",
+  "ortools==9.15.6755",
   "numpy==2.3.5",
   "scikit-learn==1.8.0",
 ]

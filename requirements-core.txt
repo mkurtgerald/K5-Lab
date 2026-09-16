@@ -13,3 +13,13 @@ packaging==26.3
 prettytable==3.18.0
 wcwidth==0.8.3
 html5rdf==1.2.1
+ortools==9.15.6755
+absl-py==2.5.0
+immutabledict==4.3.1
+pandas==2.3.3
+protobuf==6.33.6
+typing-extensions==4.16.0
+python-dateutil==2.9.0.post0
+pytz==2026.3.post1
+tzdata==2025.3
+six==1.17.0
