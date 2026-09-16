@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mosaic-lab"
+version = "0.1.0"
+description = "Experimental utilities and reproducible benchmarks"
+requires-python = ">=3.12,<3.14"
+license = "LicenseRef-Proprietary"
+license-files = ["LICENSE"]
+dependencies = ["rdflib==7.5.0", "numpy==2.3.5", "scikit-learn==1.8.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

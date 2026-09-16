@@ -1,0 +1,9 @@
+# Exact tested runtime versions, not a cryptographic artifact lock.
+# A release additionally requires artifact hashes and a transitive binary review.
+numpy==2.3.5
+scipy==1.17.0
+scikit-learn==1.8.0
+joblib==1.5.3
+threadpoolctl==3.6.0
+rdflib==7.5.0
+pyparsing==3.3.2

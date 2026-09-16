@@ -1,0 +1,149 @@
+{
+  "reviewed_on": "2026-09-16",
+  "release_approved": false,
+  "components": [
+    {
+      "name": "rdflib",
+      "status": "used",
+      "version": "7.5.0",
+      "upstream": "https://github.com/RDFLib/rdflib",
+      "installed_metadata_sha256": "7343a0470c125ec1c6de16712e1a44eaecb052eedf603c61e3872c36304ed136",
+      "artifact_sha256": null,
+      "distribution_approved": false,
+      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+    },
+    {
+      "name": "scikit-learn",
+      "status": "used",
+      "version": "1.8.0",
+      "upstream": "https://github.com/scikit-learn/scikit-learn",
+      "installed_metadata_sha256": "95a8f42f4170fc940a71fedfed4fd9353723eb44126130a971a072fe5305d967",
+      "artifact_sha256": null,
+      "distribution_approved": false,
+      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+    },
+    {
+      "name": "torch",
+      "status": "used",
+      "version": "2.10.0+cpu",
+      "upstream": "https://github.com/pytorch/pytorch",
+      "installed_metadata_sha256": "d6031f9f56089c835e78a75875c1be87a34bcfdf5a79ef9f069084ed9244a5d4",
+      "artifact_sha256": null,
+      "distribution_approved": false,
+      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+    },
+    {
+      "name": "numpy",
+      "status": "used",
+      "version": "2.3.5",
+      "upstream": "https://github.com/numpy/numpy",
+      "installed_metadata_sha256": "6002f29765e5bc1a3be4a1b92ed56b64968a0fecba73e7f81cd536d0c40f4fa3",
+      "artifact_sha256": null,
+      "distribution_approved": false,
+      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+    },
+    {
+      "name": "scipy",
+      "status": "used",
+      "version": "1.17.0",
+      "upstream": "https://github.com/scipy/scipy",
+      "installed_metadata_sha256": "6a5fbbbd6ccb4bedd34782730dd78cb840429a82e2f69e55390af1b51bf7999b",
+      "artifact_sha256": null,
+      "distribution_approved": false,
+      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+    },
+    {
+      "name": "joblib",
+      "status": "used",
+      "version": "1.5.3",
+      "upstream": "https://github.com/joblib/joblib",
+      "installed_metadata_sha256": "cee9c60896ae4e7a965a840fbde50d111d2f8018f61201d1ed2e9fc3dd4883e6",
+      "artifact_sha256": null,
+      "distribution_approved": false,
+      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+    },
+    {
+      "name": "threadpoolctl",
+      "status": "used",
+      "version": "3.6.0",
+      "upstream": "https://github.com/joblib/threadpoolctl",
+      "installed_metadata_sha256": "a45df8d07ea1883d772183a501d7d526076aa70dfcfddb276a2cbdc04def5341",
+      "artifact_sha256": null,
+      "distribution_approved": false,
+      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+    },
+    {
+      "name": "pyparsing",
+      "status": "used",
+      "version": "3.3.2",
+      "upstream": "https://github.com/pyparsing/pyparsing",
+      "installed_metadata_sha256": "3311a8b949d70f71a2b9788a9327f11d9d5a6a8012d6c046ca254ad2de877f45",
+      "artifact_sha256": null,
+      "distribution_approved": false,
+      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+    },
+    {
+      "name": "pySHACL",
+      "status": "candidate",
+      "upstream": "https://github.com/RDFLib/pySHACL",
+      "project_license": "Apache-2.0",
+      "version": null,
+      "artifact_sha256": null,
+      "distribution_approved": false
+    },
+    {
+      "name": "OR-Tools",
+      "status": "candidate",
+      "upstream": "https://github.com/google/or-tools",
+      "project_license": "Apache-2.0",
+      "version": null,
+      "artifact_sha256": null,
+      "distribution_approved": false
+    },
+    {
+      "name": "River",
+      "status": "candidate",
+      "upstream": "https://github.com/online-ml/river",
+      "project_license": "BSD-3-Clause",
+      "version": null,
+      "artifact_sha256": null,
+      "distribution_approved": false
+    },
+    {
+      "name": "Gymnasium",
+      "status": "candidate",
+      "upstream": "https://github.com/Farama-Foundation/Gymnasium",
+      "project_license": "MIT",
+      "version": null,
+      "artifact_sha256": null,
+      "distribution_approved": false
+    },
+    {
+      "name": "Stable-Baselines3",
+      "status": "candidate",
+      "upstream": "https://github.com/DLR-RM/stable-baselines3",
+      "project_license": "MIT",
+      "version": null,
+      "artifact_sha256": null,
+      "distribution_approved": false
+    },
+    {
+      "name": "Ray/RLlib",
+      "status": "candidate",
+      "upstream": "https://github.com/ray-project/ray",
+      "project_license": "Apache-2.0",
+      "version": null,
+      "artifact_sha256": null,
+      "distribution_approved": false
+    },
+    {
+      "name": "Open Policy Agent",
+      "status": "candidate",
+      "upstream": "https://github.com/open-policy-agent/opa",
+      "project_license": "Apache-2.0",
+      "version": null,
+      "artifact_sha256": null,
+      "distribution_approved": false
+    }
+  ]
+}

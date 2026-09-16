@@ -1,0 +1,5 @@
+{
+  "algorithm": "sha256-lowercase-token",
+  "digests": [],
+  "note": "Do not store protected vocabulary or hashes of protected vocabulary in this public repository. Private semantic review stays outside this workspace."
+}
