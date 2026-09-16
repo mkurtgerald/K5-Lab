@@ -1,0 +1,51 @@
+{
+  "stage": "S2",
+  "candidate": "streaming-learning",
+  "review_date": "2026-09-16",
+  "donor": {
+    "name": "river",
+    "version": "0.26.1",
+    "tag_commit": "64285b9dd6c606804753235fe992bcf25b9856ee",
+    "license": "BSD-3-Clause",
+    "python": ">=3.11",
+    "build_backend": "maturin",
+    "native_extension": true,
+    "core_dependency_constraints": [
+      "scipy>=1.14.1,<2",
+      "numpy>=2.2.5,<3",
+      "narwhals>=2.0.0"
+    ]
+  },
+  "selected_runtime": {
+    "river": "0.26.1",
+    "narwhals": "2.26.0",
+    "numpy": "2.3.5",
+    "scipy": "1.17.0"
+  },
+  "controls": {
+    "synthetic_only": true,
+    "fixed_model_family": true,
+    "partition_isolation": true,
+    "ordered_updates": true,
+    "bounded_sources": 256,
+    "bounded_updates": 100000,
+    "max_features": 32,
+    "remote_access": false,
+    "persistence_exposed": false,
+    "external_actions": false,
+    "authorization": false
+  },
+  "artifact_review": {
+    "exact_hosted_wheel_digest_captured": false,
+    "native_library_inventory_complete": false,
+    "sbom_complete": false,
+    "notices_complete": false,
+    "vulnerability_review_complete": false,
+    "commercial_distribution_approved": false
+  },
+  "notes": [
+    "Candidate acceptance is separate from release approval.",
+    "Scores are not claimed to be calibrated probabilities.",
+    "No donor source or trained artifact is vendored."
+  ]
+}
