@@ -77,11 +77,17 @@ class DelegatedSimulation:
         if started<utc(grant.granted_at) or started>=utc(grant.expires_at): raise ValueError("session start outside delegation lifetime")
         if isinstance(max_tracked_deliveries,bool) or not isinstance(max_tracked_deliveries,int) or not 1<=max_tracked_deliveries<=_MAX_TRACKED_DELIVERIES: raise ValueError("max_tracked_deliveries outside bounded limit")
         self._grant=grant; self._session_id=session_id; self._started_at=started; self._max_tracked_deliveries=max_tracked_deliveries
-        self._receipts={}; self._step_receipts={}; self._step_reversible={}; self._effect_times=[]; self._lock=Lock()
+        self._receipts={}; self._delivery_steps={}; self._step_receipts={}; self._step_reversible={}; self._effect_times=[]; self._lock=Lock()
     def _counts(self):
         vals=self._step_receipts.values(); return (sum(x.status=="verified_complete" for x in vals),sum(x.status=="failed" for x in vals),sum(x.status=="outcome_unknown" for x in vals))
     def _receipt(self,*,status,reason,step,step_index,mocked_effects=0,rollback_available=False):
         c,f,u=self._counts(); return SimulationReceipt(status,reason,self._session_id,step.step_id,step.delivery_id,step_index,mocked_effects,c,f,u,rollback_available)
+    def _replayed_delivery(self,step:SimulationStep)->SimulationReceipt|None:
+        existing=self._receipts.get(step.delivery_id)
+        if existing is None:return None
+        if self._delivery_steps.get(step.delivery_id)!=step:
+            return self._receipt(status="denied",reason="delivery_identity_collision",step=step,step_index=existing.step_index)
+        return existing
     def attempt_step(self,step:SimulationStep,*,now:datetime,current_policy_revision:str,current_state_digest:str,current_profile:str,authority_available:bool,cancelled:bool,grant_revoked:bool,mocked_outcome:str,reversible:bool)->SimulationReceipt:
         if not isinstance(step,SimulationStep): raise ValueError("trusted simulation step required")
         now=utc(now); token(current_policy_revision); _digest(current_state_digest,field="current_state_digest")
@@ -89,7 +95,7 @@ class DelegatedSimulation:
         if not all(isinstance(v,bool) for v in (authority_available,cancelled,grant_revoked,reversible)): raise ValueError("boolean flags required")
         if mocked_outcome not in _ALLOWED_OUTCOMES: raise ValueError("unsupported mocked outcome")
         with self._lock:
-            existing=self._receipts.get(step.delivery_id)
+            existing=self._replayed_delivery(step)
             if existing is not None:return existing
             prior=self._step_receipts.get(step.step_id); idx=len(self._step_receipts)+1
             if prior is not None:
@@ -107,7 +113,7 @@ class DelegatedSimulation:
             cutoff=now-timedelta(seconds=60); self._effect_times=[x for x in self._effect_times if x>cutoff]
             if len(self._effect_times)>=self._grant.max_actions_per_minute:return self._receipt(status="rate_limited",reason="rate_budget",step=step,step_index=idx)
             self._effect_times.append(now); self._step_reversible[step.step_id]=reversible; receipt=self._receipt(status=mocked_outcome,reason="mocked_effect_recorded",step=step,step_index=idx,mocked_effects=1,rollback_available=reversible and mocked_outcome=="verified_complete")
-            self._step_receipts[step.step_id]=receipt; c,f,u=self._counts(); receipt=replace(receipt,completed_steps=c,failed_steps=f,unknown_steps=u); self._step_receipts[step.step_id]=receipt; self._receipts[step.delivery_id]=receipt; return receipt
+            self._step_receipts[step.step_id]=receipt; c,f,u=self._counts(); receipt=replace(receipt,completed_steps=c,failed_steps=f,unknown_steps=u); self._step_receipts[step.step_id]=receipt; self._delivery_steps[step.delivery_id]=step; self._receipts[step.delivery_id]=receipt; return receipt
     def reconcile(self,step_id:str,*,authoritative_outcome:str,reversible:bool)->SimulationReceipt:
         token(step_id)
         if authoritative_outcome not in {"verified_complete","failed"} or not isinstance(reversible,bool): raise ValueError("invalid reconciliation")
@@ -157,7 +163,7 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
             idx = len(self._step_receipts) + 1
             return self._receipt(status="denied", reason="audit_binding_mismatch", step=step, step_index=idx)
 
-        existing = self._receipts.get(step.delivery_id)
+        existing = self._replayed_delivery(step)
         if existing is not None:
             return existing
         prior = self._step_receipts.get(step.step_id)
