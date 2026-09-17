@@ -90,6 +90,30 @@ class CorrelationReceipt:
     external_actions: int = 0
     version: str = "1"
 
+    def __post_init__(self) -> None:
+        for value in (self.correlation_id, self.partition, self.entity_key):
+            token(value)
+        if self.version != "1":
+            raise ValueError("unsupported correlation receipt version")
+        if self.authorized is not False or self.external_actions != 0:
+            raise ValueError("correlation receipts have no execution authority")
+        if (
+            not isinstance(self.event_ids, tuple)
+            or not 2 <= len(self.event_ids) <= MAX_CORRELATION_EVENTS
+            or len(set(self.event_ids)) != len(self.event_ids)
+        ):
+            raise ValueError("bounded unique event_ids tuple required")
+        for event_id in self.event_ids:
+            token(event_id)
+        started = utc(self.started_at)
+        ended = utc(self.ended_at)
+        if ended < started:
+            raise ValueError("correlation end precedes start")
+        digest_input = "\n".join((self.version, self.partition, self.entity_key, *self.event_ids))
+        expected = "corr_" + sha256(digest_input.encode("utf-8")).hexdigest()[:32]
+        if self.correlation_id != expected:
+            raise ValueError("correlation receipt integrity mismatch")
+
 
 class BoundedEventMemory:
     """Deterministic bounded memory; no persistence, network, or external execution."""
