@@ -114,7 +114,7 @@ def upstream_digest():
     )
     assert text.status == "ok"
     assert not text.authorized and not text.execute and text.external_actions == 0
-    return digest
+    return digest, retrieval.content_digest
 
 
 def grant(digest):
@@ -135,7 +135,7 @@ def grant(digest):
     )
 
 
-def admission_event():
+def admission_event(evidence_digest):
     return AuditEvent(
         event_id="effect-admission-1",
         request_id="step1",
@@ -153,10 +153,11 @@ def admission_event():
         approval_ref="approval1",
         outcome="attempted",
         recorded_at=EFFECT_TIME,
+        evidence_digests=(evidence_digest,),
     )
 
 
-def attempt(simulation):
+def attempt(simulation, evidence_digest):
     return simulation.attempt_step(
         SimulationStep("step1", "delivery1", "act1", "target1"),
         now=EFFECT_TIME,
@@ -168,29 +169,29 @@ def attempt(simulation):
         grant_revoked=False,
         mocked_outcome="verified_complete",
         reversible=True,
-        audit_event=admission_event(),
+        audit_event=admission_event(evidence_digest),
     )
 
 
 def test_end_to_end_effect_requires_successful_audit_admission():
-    digest = upstream_digest()
+    digest, evidence_digest = upstream_digest()
     audit = AuditBuffer(max_entries=8)
     simulation = AuditedDelegatedSimulation(
         grant(digest), session_id="session1", started_at=NOW, audit_sink=audit
     )
-    receipt = attempt(simulation)
+    receipt = attempt(simulation, evidence_digest)
     assert receipt.status == "verified_complete"
     assert receipt.mocked_effects == 1
     assert not receipt.authorized and not receipt.execute and receipt.external_actions == 0
-    assert audit.snapshot() == (admission_event(),)
+    assert audit.snapshot() == (admission_event(evidence_digest),)
 
 
 def test_end_to_end_audit_unavailable_has_zero_mocked_effects():
-    digest = upstream_digest()
+    digest, evidence_digest = upstream_digest()
     simulation = AuditedDelegatedSimulation(
         grant(digest), session_id="session1", started_at=NOW, audit_sink=None
     )
-    receipt = attempt(simulation)
+    receipt = attempt(simulation, evidence_digest)
     assert receipt.status == "denied"
     assert receipt.reason == "audit_unavailable"
     assert receipt.mocked_effects == 0
