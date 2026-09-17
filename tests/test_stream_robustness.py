@@ -1,8 +1,10 @@
 import unittest
+from unittest.mock import patch
 
 from mosaic_lab.stream_robustness import (
     evaluate_stream_robustness,
     evaluate_stream_robustness_multiseed,
+    require_stream_robustness_acceptance,
 )
 from mosaic_lab.streaming import RiverBinaryAdapter, StreamSample
 from datetime import datetime, timezone
@@ -23,12 +25,12 @@ class StreamRobustnessTests(unittest.TestCase):
                 self.assertGreaterEqual(value, 0.0, key)
                 self.assertLessEqual(value, 1.0, key)
 
-    def test_multiseed_robustness_candidate_reports_honest_gate_state(self):
-        result = evaluate_stream_robustness_multiseed(size=600, seeds=(7, 31, 59))
+    def test_multiseed_robustness_acceptance_is_enforced_and_non_executing(self):
+        result = require_stream_robustness_acceptance(size=600, seeds=(7, 31, 59))
         self.assertEqual(result["external_actions"], 0)
         self.assertFalse(result["production_qualified"])
-        self.assertFalse(result["performance_gate_established"])
-        self.assertIsInstance(result["candidate_passed"], bool)
+        self.assertTrue(result["performance_gate_established"])
+        self.assertTrue(result["passed"])
         self.assertEqual(result["seeds"], (7, 31, 59))
         self.assertEqual(len(result["runs"]), 3)
         self.assertGreater(result["summary"]["total_rare_samples"], 0)
@@ -36,6 +38,14 @@ class StreamRobustnessTests(unittest.TestCase):
             if key != "total_rare_samples":
                 self.assertGreaterEqual(value, 0.0, key)
                 self.assertLessEqual(value, 1.0, key)
+
+    def test_acceptance_wrapper_fails_closed_when_measurement_fails(self):
+        with patch(
+            "mosaic_lab.stream_robustness.evaluate_stream_robustness_multiseed",
+            return_value={"passed": False},
+        ):
+            with self.assertRaises(RuntimeError):
+                require_stream_robustness_acceptance()
 
     def test_invalid_robustness_parameters_fail_closed(self):
         for interval in (True, 0, 4, 101):

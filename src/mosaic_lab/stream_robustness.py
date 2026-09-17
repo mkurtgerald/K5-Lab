@@ -189,12 +189,7 @@ def evaluate_stream_robustness_multiseed(
     poison_interval: int = DEFAULT_POISON_INTERVAL,
     rare_abs_feature: float = DEFAULT_RARE_ABS_FEATURE,
 ) -> dict[str, object]:
-    """Aggregate fixed-seed robustness evidence before promoting it to a hard gate.
-
-    Candidate limits are intentionally explicit and are reported without making CI depend
-    on them yet. This lets exact hosted evidence establish whether the proposed limits are
-    defensible before they become an acceptance gate on a later exact revision.
-    """
+    """Evaluate the fixed-seed synthetic robustness acceptance envelope."""
     seeds = _validate_seeds(seeds)
     runs = tuple(
         evaluate_stream_robustness(
@@ -280,7 +275,7 @@ def evaluate_stream_robustness_multiseed(
         ),
     }
 
-    candidate_passed = (
+    passed = (
         summary["min_poisoned_answered_rate"] >= criteria["min_poisoned_answered_rate"]
         and summary["min_poisoned_balanced_accuracy"] >= criteria["min_poisoned_balanced_accuracy"]
         and summary["max_poisoned_false_positive_rate_answered"]
@@ -304,7 +299,7 @@ def evaluate_stream_robustness_multiseed(
     )
 
     return {
-        "scope": "synthetic_stream_multiseed_robustness_candidate_only",
+        "scope": "synthetic_stream_multiseed_robustness_acceptance_only",
         "seeds": seeds,
         "samples_per_seed": size,
         "poison_interval": poison_interval,
@@ -312,9 +307,17 @@ def evaluate_stream_robustness_multiseed(
         "criteria": criteria,
         "summary": summary,
         "runs": runs,
-        "candidate_passed": candidate_passed,
-        "performance_gate_established": False,
+        "passed": passed,
+        "performance_gate_established": True,
         "production_qualified": False,
         "saved_weights": False,
         "external_actions": 0,
     }
+
+
+def require_stream_robustness_acceptance(**kwargs: object) -> dict[str, object]:
+    """Return exact acceptance evidence or fail the caller closed."""
+    result = evaluate_stream_robustness_multiseed(**kwargs)
+    if result["passed"] is not True:
+        raise RuntimeError("synthetic stream robustness acceptance failed")
+    return result

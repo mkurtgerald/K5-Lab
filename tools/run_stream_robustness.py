@@ -8,7 +8,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from mosaic_lab.stream_robustness import (
     evaluate_stream_robustness,
-    evaluate_stream_robustness_multiseed,
+    require_stream_robustness_acceptance,
 )
 
 if __name__ == "__main__":
@@ -18,7 +18,7 @@ if __name__ == "__main__":
     parser.add_argument("--multi-seed", action="store_true")
     args = parser.parse_args()
     if args.multi_seed:
-        result = evaluate_stream_robustness_multiseed(size=args.samples)
+        result = require_stream_robustness_acceptance(size=args.samples)
     else:
         result = evaluate_stream_robustness(size=args.samples, seed=args.seed)
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
