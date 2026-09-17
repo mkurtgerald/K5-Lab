@@ -212,3 +212,29 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
                 try:self._audit_sink.append(audit_event)
                 except Exception:return self._receipt(status="denied",reason="audit_admission_failed",step=step,step_index=idx)
             return super().attempt_step(step,**kwargs)
+
+    def reconcile(self,step_id:str,*,authoritative_outcome:str,reversible:bool,audit_event:AuditEvent|None=None,now:datetime|None=None)->SimulationReceipt:
+        token(step_id)
+        if authoritative_outcome not in {"verified_complete","failed"} or not isinstance(reversible,bool):
+            raise ValueError("invalid reconciliation")
+        with self._audit_gate:
+            with self._lock:
+                prior=self._step_receipts.get(step_id)
+                if prior is None:
+                    raise ValueError("cannot reconcile an unknown step")
+                if prior.status!="outcome_unknown":
+                    return prior
+                if self._audit_sink is None:
+                    return replace(prior,status="reconciliation_required",reason="audit_unavailable",mocked_effects=0,rollback_available=False)
+                try:
+                    audit_now=utc(now)
+                except (TypeError,ValueError):
+                    return replace(prior,status="reconciliation_required",reason="audit_binding_mismatch",mocked_effects=0,rollback_available=False)
+                expected_decision="returned" if authoritative_outcome=="verified_complete" else "failed"
+                if not isinstance(audit_event,AuditEvent) or audit_event.request_id!=step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=self._grant.policy_revision or audit_event.profile!=self._grant.profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!=expected_decision or audit_event.reason!="reconciled" or audit_event.outcome!=authoritative_outcome or utc(audit_event.recorded_at)!=audit_now:
+                    return replace(prior,status="reconciliation_required",reason="audit_binding_mismatch",mocked_effects=0,rollback_available=False)
+                try:
+                    self._audit_sink.append(audit_event)
+                except Exception:
+                    return replace(prior,status="reconciliation_required",reason="audit_admission_failed",mocked_effects=0,rollback_available=False)
+            return super().reconcile(step_id,authoritative_outcome=authoritative_outcome,reversible=reversible)
