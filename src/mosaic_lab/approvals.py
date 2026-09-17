@@ -147,7 +147,19 @@ class ApprovalUseLedger:
 
         if isinstance(records, (str, bytes)):
             raise ValueError("approval records must be trusted record objects")
-        items = tuple(records)
+        try:
+            iterator = iter(records)
+        except TypeError as exc:
+            raise ValueError("approval records must be a bounded iterable") from exc
+        items_list: list[ApprovalRecord] = []
+        try:
+            for _ in range(required_approvals + 1):
+                items_list.append(next(iterator))
+        except StopIteration:
+            pass
+        except Exception as exc:
+            raise ValueError("approval record iteration failed") from exc
+        items = tuple(items_list)
         if len(items) < required_approvals:
             return ApprovalCheck(
                 status="awaiting_approval",
