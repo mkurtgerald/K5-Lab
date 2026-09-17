@@ -10,6 +10,8 @@
     "learned_runtime_python": "requirements-s3-runtime.txt",
     "learned_runtime_torch": "requirements-neural.txt",
     "component_review": "provenance/components.json",
+    "allocation_evidence": "provenance/s1-allocation.json",
+    "streaming_evidence": "provenance/s2-streaming.json",
     "learned_runtime_evidence": "provenance/s3-rl-review.json"
   },
   "scopes": {

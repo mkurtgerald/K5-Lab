@@ -47,6 +47,13 @@ class ReleaseSbomTests(unittest.TestCase):
             s3_review=s3_review,
         )
 
+    def _core_component(self, name):
+        return next(
+            row
+            for row in self._document()["scopes"]["core"]["components"]
+            if row["name"] == name
+        )
+
     def test_sbom_is_deterministic(self):
         document = self._document()
         self.assertEqual(canonical_text(document), canonical_text(deepcopy(document)))
@@ -76,6 +83,25 @@ class ReleaseSbomTests(unittest.TestCase):
         self.assertEqual(torch["native_status"], "confirmed-native")
         self.assertFalse(torch["distribution_approved"])
         self.assertIn("artifact_sha256", torch)
+
+    def test_s1_allocation_artifact_evidence_is_carried_into_sbom(self):
+        ortools = self._core_component("ortools")
+        self.assertEqual(
+            ortools["artifact_sha256"],
+            "ebd5aea00374e3aad7a78de59058aca5e871a26a3c385cd0860ef1d685d03c9a",
+        )
+        self.assertEqual(ortools["license_expression"], "Apache-2.0")
+        self.assertEqual(ortools["native_status"], "review-required")
+        self.assertFalse(ortools["distribution_approved"])
+
+    def test_s2_streaming_artifact_evidence_is_carried_into_sbom(self):
+        narwhals = self._core_component("narwhals")
+        self.assertEqual(
+            narwhals["artifact_sha256"],
+            "29326d74f107c347fd1009bd58e38d9f7c7c5b51e6de97bc93dbc325d9038b54",
+        )
+        self.assertEqual(narwhals["license_expression"], "MIT")
+        self.assertFalse(narwhals["distribution_approved"])
 
     def test_release_flags_remain_false(self):
         document = self._document()

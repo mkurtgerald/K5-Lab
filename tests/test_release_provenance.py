@@ -21,6 +21,8 @@ class ReleaseProvenanceTests(unittest.TestCase):
 
         manifest = json.loads((ROOT / "provenance/release-manifest.json").read_text(encoding="utf-8"))
         components = json.loads((ROOT / "provenance/components.json").read_text(encoding="utf-8"))
+        s1_allocation = json.loads((ROOT / "provenance/s1-allocation.json").read_text(encoding="utf-8"))
+        s2_streaming = json.loads((ROOT / "provenance/s2-streaming.json").read_text(encoding="utf-8"))
         s3_review = json.loads((ROOT / "provenance/s3-rl-review.json").read_text(encoding="utf-8"))
         pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         core_pins = parse_pins(
@@ -35,9 +37,27 @@ class ReleaseProvenanceTests(unittest.TestCase):
             (ROOT / "requirements-s3-runtime.txt").read_text(encoding="utf-8"),
             source="requirements-s3-runtime.txt",
         )
-        return manifest, pyproject, core_pins, neural_pins, runtime_pins, components, s3_review
+        return (
+            manifest,
+            pyproject,
+            core_pins,
+            neural_pins,
+            runtime_pins,
+            components,
+            s1_allocation,
+            s2_streaming,
+            s3_review,
+        )
 
-    def _errors(self, *, mutate_components=None, mutate_manifest=None, mutate_s3=None):
+    def _errors(
+        self,
+        *,
+        mutate_components=None,
+        mutate_manifest=None,
+        mutate_s1=None,
+        mutate_s2=None,
+        mutate_s3=None,
+    ):
         (
             manifest,
             pyproject,
@@ -45,15 +65,23 @@ class ReleaseProvenanceTests(unittest.TestCase):
             neural_pins,
             runtime_pins,
             components,
+            s1_allocation,
+            s2_streaming,
             s3_review,
         ) = self._fixture()
         manifest = deepcopy(manifest)
         components = deepcopy(components)
+        s1_allocation = deepcopy(s1_allocation)
+        s2_streaming = deepcopy(s2_streaming)
         s3_review = deepcopy(s3_review)
         if mutate_components is not None:
             mutate_components(components)
         if mutate_manifest is not None:
             mutate_manifest(manifest)
+        if mutate_s1 is not None:
+            mutate_s1(s1_allocation)
+        if mutate_s2 is not None:
+            mutate_s2(s2_streaming)
         if mutate_s3 is not None:
             mutate_s3(s3_review)
         return validate_documents(
@@ -63,6 +91,8 @@ class ReleaseProvenanceTests(unittest.TestCase):
             neural_pins=neural_pins,
             runtime_pins=runtime_pins,
             components=components,
+            s1_allocation=s1_allocation,
+            s2_streaming=s2_streaming,
             s3_review=s3_review,
         )
 
@@ -97,6 +127,44 @@ class ReleaseProvenanceTests(unittest.TestCase):
             manifest["commercial_distribution"] = True
         errors = self._errors(mutate_manifest=mutate)
         self.assertTrue(any("commercial_distribution=false" in error for error in errors))
+
+    def test_s1_artifact_digest_drift_fails(self):
+        def mutate(components):
+            next(row for row in components["components"] if row["name"] == "OR-Tools")[
+                "artifact_sha256"
+            ] = "0" * 64
+        errors = self._errors(mutate_components=mutate)
+        self.assertTrue(any("S1 ortools: aggregate artifact digest" in error for error in errors))
+
+    def test_s1_license_drift_fails(self):
+        def mutate(components):
+            next(row for row in components["components"] if row["name"] == "pandas")[
+                "project_license"
+            ] = "UNKNOWN"
+        errors = self._errors(mutate_components=mutate)
+        self.assertTrue(any("S1 pandas: aggregate license" in error for error in errors))
+
+    def test_missing_s1_aggregate_component_fails(self):
+        def mutate(components):
+            components["components"] = [
+                row for row in components["components"] if row["name"] != "absl-py"
+            ]
+        errors = self._errors(mutate_components=mutate)
+        self.assertTrue(any("S1 absl-py: aggregate component evidence is missing" in error for error in errors))
+
+    def test_s2_narwhals_digest_drift_fails(self):
+        def mutate(components):
+            next(row for row in components["components"] if row["name"] == "Narwhals")[
+                "artifact_sha256"
+            ] = "f" * 64
+        errors = self._errors(mutate_components=mutate)
+        self.assertTrue(any("S2 narwhals: aggregate artifact digest" in error for error in errors))
+
+    def test_s1_release_approval_tamper_fails(self):
+        def mutate(s1_allocation):
+            s1_allocation["release_approved"] = True
+        errors = self._errors(mutate_s1=mutate)
+        self.assertTrue(any("S1 allocation evidence must keep release_approved=false" in error for error in errors))
 
 
 if __name__ == "__main__":

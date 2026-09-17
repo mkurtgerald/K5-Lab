@@ -38,6 +38,140 @@ def parse_pins(text: str, *, source: str) -> dict[str, str]:
     return pins
 
 
+def _component_index(components: dict[str, object], errors: list[str]) -> dict[str, dict[str, object]]:
+    if components.get("release_approved") is not False:
+        errors.append("aggregate component ledger must keep release_approved=false")
+    rows = components.get("components")
+    if not isinstance(rows, list):
+        errors.append("component ledger must contain a components list")
+        return {}
+    by_name: dict[str, dict[str, object]] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            errors.append("component ledger contains malformed row")
+            continue
+        key = canonical_name(str(row["name"]))
+        if key in by_name:
+            errors.append(f"duplicate aggregate component identity: {key}")
+            continue
+        by_name[key] = row
+        if row.get("distribution_approved") is not False:
+            errors.append(f"{key}: distribution_approved must remain false")
+        digest = row.get("artifact_sha256")
+        if digest is not None and (not isinstance(digest, str) or not HEX64_RE.fullmatch(digest)):
+            errors.append(f"{key}: artifact_sha256 must be null or lowercase SHA-256")
+    return by_name
+
+
+def _validate_s1_allocation(
+    *,
+    allocation: dict[str, object],
+    core_pins: dict[str, str],
+    by_name: dict[str, dict[str, object]],
+    errors: list[str],
+) -> None:
+    if allocation.get("release_approved") is not False:
+        errors.append("S1 allocation evidence must keep release_approved=false")
+    rows = allocation.get("components")
+    if not isinstance(rows, list) or not rows:
+        errors.append("S1 allocation evidence must contain reviewed components")
+        return
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+            errors.append("S1 allocation evidence contains malformed component")
+            continue
+        name = canonical_name(str(row["name"]))
+        if name in seen:
+            errors.append(f"S1 allocation evidence contains duplicate component {name}")
+            continue
+        seen.add(name)
+        version = row.get("version")
+        license_expr = row.get("license")
+        digest = row.get("sha256")
+        if row.get("distribution_approved") is not False:
+            errors.append(f"S1 {name}: distribution_approved must remain false")
+        if not isinstance(version, str) or core_pins.get(name) != version:
+            errors.append(f"S1 {name}: reviewed version {version!r} does not match exact core pin {core_pins.get(name)!r}")
+        if not isinstance(license_expr, str) or not license_expr.strip():
+            errors.append(f"S1 {name}: reviewed license is missing")
+        if not isinstance(digest, str) or not HEX64_RE.fullmatch(digest):
+            errors.append(f"S1 {name}: reviewed artifact SHA-256 is missing or invalid")
+        aggregate = by_name.get(name)
+        if aggregate is None:
+            errors.append(f"S1 {name}: aggregate component evidence is missing")
+            continue
+        if base_version(str(aggregate.get("version", ""))) != base_version(str(version or "")):
+            errors.append(f"S1 {name}: aggregate version does not match stage evidence")
+        if aggregate.get("project_license") != license_expr:
+            errors.append(f"S1 {name}: aggregate license does not match stage evidence")
+        if aggregate.get("artifact_sha256") != digest:
+            errors.append(f"S1 {name}: aggregate artifact digest does not match stage evidence")
+
+
+def _validate_s2_streaming(
+    *,
+    streaming: dict[str, object],
+    core_pins: dict[str, str],
+    by_name: dict[str, dict[str, object]],
+    errors: list[str],
+) -> None:
+    selected = streaming.get("selected_runtime")
+    if not isinstance(selected, dict):
+        errors.append("S2 streaming selected_runtime is missing")
+        selected = {}
+    for raw_name, version in selected.items():
+        name = canonical_name(str(raw_name))
+        if not isinstance(version, str) or core_pins.get(name) != version:
+            errors.append(f"S2 {name}: selected runtime {version!r} does not match exact core pin {core_pins.get(name)!r}")
+
+    donor = streaming.get("donor")
+    artifacts = streaming.get("hosted_linux_artifacts")
+    if not isinstance(donor, dict) or canonical_name(str(donor.get("name", ""))) != "river":
+        errors.append("S2 River donor evidence is missing")
+    if not isinstance(artifacts, dict):
+        errors.append("S2 hosted artifact evidence is missing")
+        artifacts = {}
+
+    river_artifact = artifacts.get("river")
+    if isinstance(donor, dict) and isinstance(river_artifact, dict):
+        river = by_name.get("river")
+        river_version = donor.get("version")
+        river_license = donor.get("license")
+        river_digest = river_artifact.get("sha256")
+        if river is None:
+            errors.append("S2 river: aggregate component evidence is missing")
+        else:
+            if river.get("version") != river_version:
+                errors.append("S2 river: aggregate version does not match stage evidence")
+            if river.get("project_license") != river_license:
+                errors.append("S2 river: aggregate license does not match stage evidence")
+            if river.get("artifact_sha256") != river_digest:
+                errors.append("S2 river: aggregate artifact digest does not match stage evidence")
+
+    narwhals_artifact = artifacts.get("narwhals")
+    if isinstance(narwhals_artifact, dict):
+        narwhals = by_name.get("narwhals")
+        expected_version = selected.get("narwhals")
+        expected_license = narwhals_artifact.get("license")
+        expected_digest = narwhals_artifact.get("sha256")
+        if narwhals is None:
+            errors.append("S2 narwhals: aggregate component evidence is missing")
+        else:
+            if narwhals.get("version") != expected_version:
+                errors.append("S2 narwhals: aggregate version does not match stage evidence")
+            if narwhals.get("project_license") != expected_license:
+                errors.append("S2 narwhals: aggregate license does not match stage evidence")
+            if narwhals.get("artifact_sha256") != expected_digest:
+                errors.append("S2 narwhals: aggregate artifact digest does not match stage evidence")
+
+    artifact_review = streaming.get("artifact_review")
+    if not isinstance(artifact_review, dict):
+        errors.append("S2 artifact_review block missing")
+    elif artifact_review.get("commercial_distribution_approved") is not False:
+        errors.append("S2 artifact review must keep commercial_distribution_approved=false")
+
+
 def validate_documents(
     *,
     manifest: dict[str, object],
@@ -46,6 +180,8 @@ def validate_documents(
     neural_pins: dict[str, str],
     runtime_pins: dict[str, str],
     components: dict[str, object],
+    s1_allocation: dict[str, object],
+    s2_streaming: dict[str, object],
     s3_review: dict[str, object],
 ) -> list[str]:
     errors: list[str] = []
@@ -70,34 +206,14 @@ def validate_documents(
         "learned_runtime_python": "requirements-s3-runtime.txt",
         "learned_runtime_torch": "requirements-neural.txt",
         "component_review": "provenance/components.json",
+        "allocation_evidence": "provenance/s1-allocation.json",
+        "streaming_evidence": "provenance/s2-streaming.json",
         "learned_runtime_evidence": "provenance/s3-rl-review.json",
     }
     if authoritative != expected_inputs:
         errors.append("release manifest authoritative_inputs changed or is incomplete")
 
-    if components.get("release_approved") is not False:
-        errors.append("aggregate component ledger must keep release_approved=false")
-
-    component_rows = components.get("components")
-    if not isinstance(component_rows, list):
-        errors.append("component ledger must contain a components list")
-        component_rows = []
-
-    by_name: dict[str, dict[str, object]] = {}
-    for row in component_rows:
-        if not isinstance(row, dict) or not isinstance(row.get("name"), str):
-            errors.append("component ledger contains malformed row")
-            continue
-        key = canonical_name(str(row["name"]))
-        if key in by_name:
-            errors.append(f"duplicate aggregate component identity: {key}")
-            continue
-        by_name[key] = row
-        if row.get("distribution_approved") is not False:
-            errors.append(f"{key}: distribution_approved must remain false")
-        digest = row.get("artifact_sha256")
-        if digest is not None and (not isinstance(digest, str) or not HEX64_RE.fullmatch(digest)):
-            errors.append(f"{key}: artifact_sha256 must be null or lowercase SHA-256")
+    by_name = _component_index(components, errors)
 
     combined_pins: dict[str, tuple[str, str]] = {}
     for scope, pins in (
@@ -123,6 +239,19 @@ def validate_documents(
         expected = combined_pins[name][1]
         if base_version(version) != base_version(expected):
             errors.append(f"{name}: aggregate version {version} does not match exact pin {expected}")
+
+    _validate_s1_allocation(
+        allocation=s1_allocation,
+        core_pins=core_pins,
+        by_name=by_name,
+        errors=errors,
+    )
+    _validate_s2_streaming(
+        streaming=s2_streaming,
+        core_pins=core_pins,
+        by_name=by_name,
+        errors=errors,
+    )
 
     torch_pin = neural_pins.get("torch")
     if torch_pin is None:
@@ -186,6 +315,8 @@ def validate_documents(
 def validate_repository(root: Path = ROOT) -> list[str]:
     manifest = json.loads((root / "provenance/release-manifest.json").read_text(encoding="utf-8"))
     components = json.loads((root / "provenance/components.json").read_text(encoding="utf-8"))
+    s1_allocation = json.loads((root / "provenance/s1-allocation.json").read_text(encoding="utf-8"))
+    s2_streaming = json.loads((root / "provenance/s2-streaming.json").read_text(encoding="utf-8"))
     s3_review = json.loads((root / "provenance/s3-rl-review.json").read_text(encoding="utf-8"))
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     core_pins = parse_pins(
@@ -207,6 +338,8 @@ def validate_repository(root: Path = ROOT) -> list[str]:
         neural_pins=neural_pins,
         runtime_pins=runtime_pins,
         components=components,
+        s1_allocation=s1_allocation,
+        s2_streaming=s2_streaming,
         s3_review=s3_review,
     )
 
@@ -234,6 +367,7 @@ def main() -> int:
                 "core_pin_count": len(core),
                 "isolated_python_pin_count": len(runtime),
                 "torch_pin": neural["torch"],
+                "stage_evidence_reconciled": ["s1-allocation", "s2-streaming", "s3-runtime"],
                 "commercial_distribution": False,
                 "production_qualified": False,
                 "owner_release_approved": False,
