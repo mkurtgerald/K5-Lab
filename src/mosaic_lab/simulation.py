@@ -1,314 +1,373 @@
-"""Bounded generic simulation for proposal evaluation only.
+"""Bounded, non-executing delegated-simulation contracts.
 
-The environment is synthetic, non-authorizing, and has no external effects. It
-exposes one fixed observation/action contract and project-owned hard filtering so
-a proposed prohibited action is never executed, even inside the simulation.
+The module models synthetic effect attempts only. It has no transport, executor,
+network access, persistence, or external authority. Trusted state is supplied by
+callers and rechecked at every mocked effect boundary.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from math import ceil
-from time import perf_counter
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from math import isfinite
+from threading import Lock
 
-import gymnasium as gym
-from gymnasium import spaces
-import numpy as np
-from ortools.sat.python import cp_model
+from .contracts import token, utc
 
-SIMULATION_VERSION = "1"
-OBSERVATION_DIM = 5
-ACTION_COUNT = 3
-MAX_HORIZON = 128
-DEFAULT_HORIZON = 64
-CP_SAT_TIME_SECONDS = 0.1
-UTILITY_SCALE = 100
+_MAX_STEPS = 64
+_MAX_DURATION_SECONDS = 300.0
+_MAX_RATE_PER_MINUTE = 120
+_MAX_TRACKED_DELIVERIES = 4096
+_ALLOWED_OUTCOMES = frozenset({"verified_complete", "failed", "outcome_unknown"})
 
 
-def _bounded_horizon(value: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_HORIZON:
-        raise ValueError("horizon out of range")
+def _digest(value: str, *, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value)
+    ):
+        raise ValueError(f"{field} must be a lowercase sha256 digest")
     return value
 
 
-def _action(value: int) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-        raise ValueError("action must be an integer")
-    parsed = int(value)
-    if not 0 <= parsed < ACTION_COUNT:
-        raise ValueError("action out of range")
-    return parsed
+@dataclass(frozen=True)
+class DelegationGrant:
+    """Trusted grant for one bounded synthetic simulation session."""
 
+    grant_id: str
+    principal_ref: str
+    partition: str
+    proposal_digest: str
+    policy_revision: str
+    state_digest: str
+    allowed_actions: tuple[str, ...]
+    allowed_targets: tuple[str, ...]
+    granted_at: datetime
+    expires_at: datetime
+    max_steps: int
+    max_duration_seconds: float
+    max_actions_per_minute: int
+    revoked: bool = False
+    profile: str = "delegated_simulation"
+    version: str = "1"
 
-def validate_observation(value: np.ndarray) -> np.ndarray:
-    array = np.asarray(value)
-    if array.shape != (OBSERVATION_DIM,):
-        raise ValueError("invalid observation shape")
-    if not np.issubdtype(array.dtype, np.number):
-        raise ValueError("observation must be numeric")
-    array = array.astype(np.float32, copy=False)
-    if not np.all(np.isfinite(array)):
-        raise ValueError("observation must be finite")
-    if np.any(array[:2] < -1.0) or np.any(array[:2] > 1.0):
-        raise ValueError("utility observation out of range")
-    if np.any(array[2:4] < 0.0) or np.any(array[2:4] > 1.0):
-        raise ValueError("constraint observation out of range")
-    if not np.all(np.isin(array[2:4], np.asarray((0.0, 1.0), dtype=np.float32))):
-        raise ValueError("constraint flags must be binary")
-    if not 0.0 <= float(array[4]) <= 1.0:
-        raise ValueError("phase observation out of range")
-    return array
+    def __post_init__(self) -> None:
+        if self.version != "1":
+            raise ValueError("unsupported delegation version")
+        if self.profile != "delegated_simulation":
+            raise ValueError("delegation grant requires delegated_simulation profile")
+        for value in (
+            self.grant_id,
+            self.principal_ref,
+            self.partition,
+            self.policy_revision,
+        ):
+            token(value)
+        _digest(self.proposal_digest, field="proposal_digest")
+        _digest(self.state_digest, field="state_digest")
+        for values, field in (
+            (self.allowed_actions, "allowed_actions"),
+            (self.allowed_targets, "allowed_targets"),
+        ):
+            if not isinstance(values, tuple) or not values or len(values) > 64:
+                raise ValueError(f"{field} must be a non-empty bounded tuple")
+            if len(set(values)) != len(values):
+                raise ValueError(f"{field} contains duplicates")
+            for value in values:
+                token(value)
+        granted = utc(self.granted_at)
+        expires = utc(self.expires_at)
+        if expires <= granted:
+            raise ValueError("delegation expiry must follow grant time")
+        if not isinstance(self.revoked, bool):
+            raise ValueError("revoked must be boolean")
+        if isinstance(self.max_steps, bool) or not isinstance(self.max_steps, int) or not 1 <= self.max_steps <= _MAX_STEPS:
+            raise ValueError("max_steps outside bounded limit")
+        if (
+            isinstance(self.max_duration_seconds, bool)
+            or not isinstance(self.max_duration_seconds, (int, float))
+            or not isfinite(self.max_duration_seconds)
+            or not 0 < float(self.max_duration_seconds) <= _MAX_DURATION_SECONDS
+        ):
+            raise ValueError("max_duration_seconds outside bounded limit")
+        if (
+            isinstance(self.max_actions_per_minute, bool)
+            or not isinstance(self.max_actions_per_minute, int)
+            or not 1 <= self.max_actions_per_minute <= _MAX_RATE_PER_MINUTE
+        ):
+            raise ValueError("max_actions_per_minute outside bounded limit")
 
 
 @dataclass(frozen=True)
-class ProposalDecision:
-    proposed_action: int
-    executed_action: int
-    allowed: bool
-    authorized: bool = False
-    external_actions: int = 0
-    version: str = SIMULATION_VERSION
+class SimulationStep:
+    step_id: str
+    delivery_id: str
+    action_ref: str
+    target_ref: str
+    version: str = "1"
 
     def __post_init__(self) -> None:
-        proposed = _action(self.proposed_action)
-        executed = _action(self.executed_action)
-        if not isinstance(self.allowed, bool):
-            raise ValueError("allowed must be boolean")
-        if self.version != SIMULATION_VERSION:
-            raise ValueError("unsupported proposal decision version")
-        if self.authorized is not False or self.external_actions != 0:
-            raise ValueError("proposal decisions have no execution authority")
-        if self.allowed and executed != proposed:
-            raise ValueError("allowed proposal must preserve proposed action")
-        if not self.allowed and executed != 0:
-            raise ValueError("prohibited proposal must fall back to no-op")
+        if self.version != "1":
+            raise ValueError("unsupported step version")
+        for value in (self.step_id, self.delivery_id, self.action_ref, self.target_ref):
+            token(value)
 
 
-def allowed_actions(observation: np.ndarray) -> tuple[int, ...]:
-    obs = validate_observation(observation)
-    allowed = [0]
-    if float(obs[2]) == 1.0:
-        allowed.append(1)
-    if float(obs[3]) == 1.0:
-        allowed.append(2)
-    return tuple(allowed)
+@dataclass(frozen=True)
+class SimulationReceipt:
+    status: str
+    reason: str
+    session_id: str
+    step_id: str
+    delivery_id: str
+    step_index: int
+    mocked_effects: int
+    completed_steps: int
+    failed_steps: int
+    unknown_steps: int
+    rollback_available: bool
+    authorized: bool = False
+    execute: bool = False
+    external_actions: int = 0
+    version: str = "1"
+
+    def __post_init__(self) -> None:
+        if self.status not in {
+            "denied",
+            "cancelled",
+            "budget_exhausted",
+            "rate_limited",
+            "reconciliation_required",
+            "verified_complete",
+            "failed",
+            "outcome_unknown",
+        }:
+            raise ValueError("unsupported simulation status")
+        for value in (self.reason, self.session_id, self.step_id, self.delivery_id):
+            token(value)
+        for value, field in (
+            (self.step_index, "step_index"),
+            (self.mocked_effects, "mocked_effects"),
+            (self.completed_steps, "completed_steps"),
+            (self.failed_steps, "failed_steps"),
+            (self.unknown_steps, "unknown_steps"),
+            (self.external_actions, "external_actions"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
+        if self.mocked_effects not in {0, 1}:
+            raise ValueError("receipt may record at most one mocked effect")
+        if self.authorized is not False or self.execute is not False or self.external_actions != 0:
+            raise ValueError("public simulation receipts cannot grant execution authority")
+        if not isinstance(self.rollback_available, bool):
+            raise ValueError("rollback_available must be boolean")
+        if self.version != "1":
+            raise ValueError("unsupported simulation receipt version")
 
 
-def filter_proposal(observation: np.ndarray, proposed_action: int) -> ProposalDecision:
-    action = _action(proposed_action)
-    permitted = action in allowed_actions(observation)
-    return ProposalDecision(action, action if permitted else 0, permitted)
+class DelegatedSimulation:
+    """Thread-safe bounded synthetic session with atomic replay protection."""
 
+    def __init__(
+        self,
+        grant: DelegationGrant,
+        *,
+        session_id: str,
+        started_at: datetime,
+        max_tracked_deliveries: int = 256,
+    ) -> None:
+        if not isinstance(grant, DelegationGrant):
+            raise ValueError("trusted delegation grant required")
+        token(session_id)
+        started = utc(started_at)
+        if started < utc(grant.granted_at) or started >= utc(grant.expires_at):
+            raise ValueError("session start outside delegation lifetime")
+        if isinstance(max_tracked_deliveries, bool) or not isinstance(max_tracked_deliveries, int):
+            raise ValueError("max_tracked_deliveries must be integer")
+        if not 1 <= max_tracked_deliveries <= _MAX_TRACKED_DELIVERIES:
+            raise ValueError("max_tracked_deliveries outside bounded limit")
+        self._grant = grant
+        self._session_id = session_id
+        self._started_at = started
+        self._max_tracked_deliveries = max_tracked_deliveries
+        self._receipts: dict[str, SimulationReceipt] = {}
+        self._step_receipts: dict[str, SimulationReceipt] = {}
+        self._effect_times: list[datetime] = []
+        self._lock = Lock()
 
-def action_utility(observation: np.ndarray, action: int) -> float:
-    obs = validate_observation(observation)
-    action = _action(action)
-    if action == 0:
-        return 0.0
-    return float(obs[action - 1])
+    def _counts(self) -> tuple[int, int, int]:
+        values = self._step_receipts.values()
+        complete = sum(item.status == "verified_complete" for item in values)
+        failed = sum(item.status == "failed" for item in values)
+        unknown = sum(item.status == "outcome_unknown" for item in values)
+        return complete, failed, unknown
 
-
-class BoundedProposalEnv(gym.Env[np.ndarray, int]):
-    """Small opaque Gymnasium environment with hard project-owned constraints."""
-
-    metadata = {"render_modes": []}
-
-    def __init__(self, *, horizon: int = DEFAULT_HORIZON, version: str = SIMULATION_VERSION):
-        if version != SIMULATION_VERSION:
-            raise ValueError("unsupported simulation version")
-        self.horizon = _bounded_horizon(horizon)
-        self.version = version
-        self.observation_space = spaces.Box(
-            low=np.asarray([-1.0, -1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            high=np.asarray([1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
-            dtype=np.float32,
+    def _receipt(
+        self,
+        *,
+        status: str,
+        reason: str,
+        step: SimulationStep,
+        step_index: int,
+        mocked_effects: int = 0,
+        rollback_available: bool = False,
+    ) -> SimulationReceipt:
+        complete, failed, unknown = self._counts()
+        return SimulationReceipt(
+            status=status,
+            reason=reason,
+            session_id=self._session_id,
+            step_id=step.step_id,
+            delivery_id=step.delivery_id,
+            step_index=step_index,
+            mocked_effects=mocked_effects,
+            completed_steps=complete,
+            failed_steps=failed,
+            unknown_steps=unknown,
+            rollback_available=rollback_available,
         )
-        self.action_space = spaces.Discrete(ACTION_COUNT)
-        self._observation: np.ndarray | None = None
-        self._step_index = 0
-        self._constraint_violations = 0
-        self._done = False
 
-    def _next_observation(self) -> np.ndarray:
-        utilities = self.np_random.integers(-100, 101, size=2).astype(np.float32) / UTILITY_SCALE
-        permitted = self.np_random.integers(0, 2, size=2).astype(np.float32)
-        phase = np.asarray([self._step_index / self.horizon], dtype=np.float32)
-        observation = np.concatenate((utilities, permitted, phase)).astype(np.float32, copy=False)
-        return validate_observation(observation).copy()
+    def attempt_step(
+        self,
+        step: SimulationStep,
+        *,
+        now: datetime,
+        current_policy_revision: str,
+        current_state_digest: str,
+        current_profile: str,
+        authority_available: bool,
+        cancelled: bool,
+        grant_revoked: bool,
+        mocked_outcome: str,
+        reversible: bool,
+    ) -> SimulationReceipt:
+        if not isinstance(step, SimulationStep):
+            raise ValueError("trusted simulation step required")
+        now = utc(now)
+        token(current_policy_revision)
+        _digest(current_state_digest, field="current_state_digest")
+        if current_profile not in {"read_only", "recommend", "approval_required", "delegated_simulation"}:
+            raise ValueError("unsupported current profile")
+        if not isinstance(authority_available, bool) or not isinstance(cancelled, bool) or not isinstance(grant_revoked, bool):
+            raise ValueError("authority and cancellation flags must be boolean")
+        if mocked_outcome not in _ALLOWED_OUTCOMES:
+            raise ValueError("unsupported mocked outcome")
+        if not isinstance(reversible, bool):
+            raise ValueError("reversible must be boolean")
 
-    def _info(self) -> dict[str, object]:
-        return {
-            "simulation_version": self.version,
-            "step_index": self._step_index,
-            "constraint_violations": self._constraint_violations,
-            "authorized": False,
-            "external_actions": 0,
-        }
+        with self._lock:
+            existing = self._receipts.get(step.delivery_id)
+            if existing is not None:
+                return existing
 
-    def reset(self, *, seed: int | None = None, options: dict | None = None):
-        if options is not None:
-            raise ValueError("reset options are not supported")
-        super().reset(seed=seed)
-        self._step_index = 0
-        self._constraint_violations = 0
-        self._done = False
-        self._observation = self._next_observation()
-        return self._observation.copy(), self._info()
+            prior_step = self._step_receipts.get(step.step_id)
+            next_index = len(self._step_receipts) + 1
+            if prior_step is not None:
+                if prior_step.status == "outcome_unknown":
+                    return self._receipt(
+                        status="reconciliation_required",
+                        reason="ambiguous_prior_outcome",
+                        step=step,
+                        step_index=prior_step.step_index,
+                    )
+                return self._receipt(
+                    status="denied",
+                    reason="duplicate_step",
+                    step=step,
+                    step_index=prior_step.step_index,
+                )
 
-    def step(self, action: int):
-        parsed = _action(action)
-        if self._observation is None:
-            raise RuntimeError("reset required before step")
-        if self._done:
-            raise RuntimeError("reset required after truncation")
-        current = self._observation.copy()
-        decision = filter_proposal(current, parsed)
-        if decision.allowed:
-            reward = action_utility(current, decision.executed_action)
-        else:
-            self._constraint_violations += 1
-            reward = -1.0
-        self._step_index += 1
-        truncated = self._step_index >= self.horizon
-        self._done = truncated
-        if not truncated:
-            self._observation = self._next_observation()
-        info = self._info() | {
-            "proposed_action": decision.proposed_action,
-            "executed_action": decision.executed_action,
-            "proposal_allowed": decision.allowed,
-        }
-        observation = current.copy() if truncated else self._observation.copy()
-        return observation, float(reward), False, truncated, info
+            if len(self._receipts) >= self._max_tracked_deliveries:
+                return self._receipt(
+                    status="denied",
+                    reason="replay_ledger_capacity",
+                    step=step,
+                    step_index=next_index,
+                )
+            if not authority_available:
+                return self._receipt(status="denied", reason="authority_unavailable", step=step, step_index=next_index)
+            if cancelled:
+                return self._receipt(status="cancelled", reason="session_cancelled", step=step, step_index=next_index)
+            if self._grant.revoked or grant_revoked:
+                return self._receipt(status="denied", reason="grant_revoked", step=step, step_index=next_index)
+            if current_profile != self._grant.profile:
+                return self._receipt(status="denied", reason="profile_changed", step=step, step_index=next_index)
+            if current_policy_revision != self._grant.policy_revision:
+                return self._receipt(status="denied", reason="policy_changed", step=step, step_index=next_index)
+            if current_state_digest != self._grant.state_digest:
+                return self._receipt(status="denied", reason="state_changed", step=step, step_index=next_index)
+            if now >= utc(self._grant.expires_at):
+                return self._receipt(status="denied", reason="grant_expired", step=step, step_index=next_index)
+            elapsed = (now - self._started_at).total_seconds()
+            if elapsed < 0:
+                return self._receipt(status="denied", reason="time_reversal", step=step, step_index=next_index)
+            if elapsed > float(self._grant.max_duration_seconds):
+                return self._receipt(status="budget_exhausted", reason="time_budget", step=step, step_index=next_index)
+            if len(self._step_receipts) >= self._grant.max_steps:
+                return self._receipt(status="budget_exhausted", reason="step_budget", step=step, step_index=next_index)
+            if step.action_ref not in self._grant.allowed_actions:
+                return self._receipt(status="denied", reason="action_out_of_scope", step=step, step_index=next_index)
+            if step.target_ref not in self._grant.allowed_targets:
+                return self._receipt(status="denied", reason="target_out_of_scope", step=step, step_index=next_index)
 
-    def state_receipt(self) -> tuple[int, int, bool, tuple[float, ...] | None]:
-        observation = None if self._observation is None else tuple(float(v) for v in self._observation)
-        return self._step_index, self._constraint_violations, self._done, observation
+            cutoff = now - timedelta(seconds=60)
+            self._effect_times = [item for item in self._effect_times if item > cutoff]
+            if len(self._effect_times) >= self._grant.max_actions_per_minute:
+                return self._receipt(status="rate_limited", reason="rate_budget", step=step, step_index=next_index)
 
+            self._effect_times.append(now)
+            receipt = self._receipt(
+                status=mocked_outcome,
+                reason="mocked_effect_recorded",
+                step=step,
+                step_index=next_index,
+                mocked_effects=1,
+                rollback_available=reversible and mocked_outcome == "verified_complete",
+            )
+            self._step_receipts[step.step_id] = receipt
+            complete, failed, unknown = self._counts()
+            receipt = replace(
+                receipt,
+                completed_steps=complete,
+                failed_steps=failed,
+                unknown_steps=unknown,
+            )
+            self._step_receipts[step.step_id] = receipt
+            self._receipts[step.delivery_id] = receipt
+            return receipt
 
-def select_noop(observation: np.ndarray) -> int:
-    validate_observation(observation)
-    return 0
-
-
-def select_heuristic(observation: np.ndarray) -> int:
-    obs = validate_observation(observation)
-    permitted = allowed_actions(obs)
-    if 1 in permitted and float(obs[0]) > 0.0:
-        return 1
-    if 2 in permitted and float(obs[1]) > 0.0:
-        return 2
-    return 0
-
-
-def select_cp_sat(observation: np.ndarray) -> int:
-    obs = validate_observation(observation)
-    permitted = set(allowed_actions(obs))
-    utilities = (
-        0,
-        int(round(float(obs[0]) * UTILITY_SCALE)),
-        int(round(float(obs[1]) * UTILITY_SCALE)),
-    )
-    model = cp_model.CpModel()
-    choices = [model.new_bool_var(f"a_{index}") for index in range(ACTION_COUNT)]
-    model.add(sum(choices) == 1)
-    for index, choice in enumerate(choices):
-        if index not in permitted:
-            model.add(choice == 0)
-    model.maximize(sum(utilities[index] * choice for index, choice in enumerate(choices)))
-    solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = 1
-    solver.parameters.random_seed = 0
-    solver.parameters.max_time_in_seconds = CP_SAT_TIME_SECONDS
-    status = solver.solve(model)
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise RuntimeError("bounded proposal model was not feasible")
-    selected = [index for index, choice in enumerate(choices) if solver.value(choice)]
-    if len(selected) != 1 or selected[0] not in permitted:
-        raise RuntimeError("solver returned invalid proposal")
-    return selected[0]
-
-
-_POLICIES = {
-    "noop": select_noop,
-    "heuristic": select_heuristic,
-    "cp_sat": select_cp_sat,
-}
-
-
-def run_baseline_episode(*, policy: str, seed: int, horizon: int = DEFAULT_HORIZON) -> dict[str, object]:
-    if policy not in _POLICIES:
-        raise ValueError("unsupported policy")
-    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 2**31 - 1:
-        raise ValueError("seed out of range")
-    env = BoundedProposalEnv(horizon=horizon)
-    observation, _ = env.reset(seed=seed)
-    total_reward = 0.0
-    actions: list[int] = []
-    latencies_ms: list[float] = []
-    while True:
-        started = perf_counter()
-        action = _POLICIES[policy](observation)
-        latencies_ms.append((perf_counter() - started) * 1000.0)
-        observation, reward, terminated, truncated, info = env.step(action)
-        actions.append(action)
-        total_reward += reward
-        if terminated or truncated:
-            break
-    latencies = sorted(latencies_ms)
-    p50 = latencies[(len(latencies) - 1) // 2]
-    p95 = latencies[max(0, ceil(0.95 * len(latencies)) - 1)]
-    return {
-        "policy": policy,
-        "seed": seed,
-        "horizon": env.horizon,
-        "steps": len(actions),
-        "total_reward": round(total_reward, 6),
-        "constraint_violations": int(info["constraint_violations"]),
-        "actions": tuple(actions),
-        "p50_decision_ms": round(p50, 6),
-        "p95_decision_ms": round(p95, 6),
-        "authorized": False,
-        "external_actions": 0,
-    }
-
-
-def benchmark_simulation(
-    *, seeds: tuple[int, ...] = (7, 19, 31, 43, 59), horizon: int = DEFAULT_HORIZON
-) -> dict[str, object]:
-    horizon = _bounded_horizon(horizon)
-    if not isinstance(seeds, tuple) or not 3 <= len(seeds) <= 16 or len(set(seeds)) != len(seeds):
-        raise ValueError("3-16 unique seeds required")
-    for seed in seeds:
-        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 2**31 - 1:
-            raise ValueError("seed out of range")
-
-    per_policy: dict[str, dict[str, object]] = {}
-    for policy in _POLICIES:
-        episodes = [run_baseline_episode(policy=policy, seed=seed, horizon=horizon) for seed in seeds]
-        rewards = [float(episode["total_reward"]) for episode in episodes]
-        p95_values = [float(episode["p95_decision_ms"]) for episode in episodes]
-        violations = sum(int(episode["constraint_violations"]) for episode in episodes)
-        per_policy[policy] = {
-            "mean_total_reward": round(float(np.mean(rewards)), 6),
-            "min_total_reward": round(min(rewards), 6),
-            "max_total_reward": round(max(rewards), 6),
-            "max_p95_decision_ms": round(max(p95_values), 6),
-            "constraint_violations": violations,
-        }
-    if per_policy["cp_sat"]["constraint_violations"] != 0:
-        raise RuntimeError("constrained baseline produced a prohibited action")
-    if float(per_policy["cp_sat"]["mean_total_reward"]) < float(per_policy["noop"]["mean_total_reward"]):
-        raise RuntimeError("constrained baseline underperformed no-op on fixed seeds")
-    if float(per_policy["cp_sat"]["mean_total_reward"]) < float(per_policy["heuristic"]["mean_total_reward"]):
-        raise RuntimeError("constrained baseline underperformed heuristic on fixed seeds")
-    return {
-        "fixture": "generic-simulation-v1",
-        "seeds": list(seeds),
-        "horizon": horizon,
-        "policies": per_policy,
-        "training_performed": False,
-        "saved_policy": False,
-        "authorized": False,
-        "external_actions": 0,
-        "commercial_distribution_approved": False,
-    }
+    def reconcile(
+        self,
+        step_id: str,
+        *,
+        authoritative_outcome: str,
+        reversible: bool,
+    ) -> SimulationReceipt:
+        token(step_id)
+        if authoritative_outcome not in {"verified_complete", "failed"}:
+            raise ValueError("reconciliation requires a terminal authoritative outcome")
+        if not isinstance(reversible, bool):
+            raise ValueError("reversible must be boolean")
+        with self._lock:
+            prior = self._step_receipts.get(step_id)
+            if prior is None:
+                raise ValueError("cannot reconcile an unknown step")
+            if prior.status != "outcome_unknown":
+                return prior
+            resolved = replace(
+                prior,
+                status=authoritative_outcome,
+                reason="reconciled",
+                mocked_effects=0,
+                rollback_available=reversible and authoritative_outcome == "verified_complete",
+            )
+            self._step_receipts[step_id] = resolved
+            complete, failed, unknown = self._counts()
+            resolved = replace(
+                resolved,
+                completed_steps=complete,
+                failed_steps=failed,
+                unknown_steps=unknown,
+            )
+            self._step_receipts[step_id] = resolved
+            return resolved
