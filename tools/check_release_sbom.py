@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import sys
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from tools.check_release_provenance import HEX64_RE, base_version, canonical_name, parse_pins
 
 ROOT = Path(__file__).resolve().parents[1]

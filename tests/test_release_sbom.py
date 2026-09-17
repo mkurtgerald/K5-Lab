@@ -1,6 +1,8 @@
 from copy import deepcopy
 from pathlib import Path
 import json
+import subprocess
+import sys
 import unittest
 
 from tools.check_release_provenance import parse_pins
@@ -12,6 +14,16 @@ ROOT = Path(__file__).resolve().parents[1]
 class ReleaseSbomTests(unittest.TestCase):
     def test_repository_sbom_matches_authoritative_inputs(self):
         self.assertEqual(validate_repository(ROOT), [])
+
+    def test_checker_cli_runs_from_repository_root(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tools/check_release_sbom.py")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
 
     def _document(self):
         manifest = json.loads((ROOT / "provenance/release-manifest.json").read_text(encoding="utf-8"))
