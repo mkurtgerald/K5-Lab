@@ -1,9 +1,13 @@
+from dataclasses import replace
+import math
 import unittest
 
 from mosaic_lab.allocation import (
     MAX_RESOURCES,
     MAX_TASKS,
     AllocationProblem,
+    AllocationResult,
+    Assignment,
     ResourceSpec,
     TaskSpec,
     benchmark_allocation,
@@ -22,6 +26,8 @@ class AllocationTests(unittest.TestCase):
         self.assertEqual(baseline.objective, 6)
         self.assertEqual(result.objective, 8)
         self.assertGreaterEqual(result.objective, baseline.objective)
+        self.assertFalse(result.authorized)
+        self.assertEqual(result.external_actions, 0)
 
     def test_deadline_excludes_late_resource(self):
         problem = AllocationProblem(
@@ -31,6 +37,8 @@ class AllocationTests(unittest.TestCase):
         result = solve_cp_sat(problem)
         self.assertEqual(result.status, "infeasible")
         self.assertEqual(result.assignments, ())
+        self.assertFalse(result.authorized)
+        self.assertEqual(result.external_actions, 0)
 
     def test_required_capacity_can_be_infeasible(self):
         problem = AllocationProblem(
@@ -94,6 +102,38 @@ class AllocationTests(unittest.TestCase):
         too_many_resources = tuple(ResourceSpec(f"r{i}", 1, 1) for i in range(MAX_RESOURCES + 1))
         with self.assertRaisesRegex(ValueError, "resources"):
             AllocationProblem((TaskSpec("t1", 1, 1, 1),), too_many_resources)
+
+    def test_assignment_and_result_direct_reconstruction_fail_closed(self):
+        for args in (("bad id", "r1"), ("t1", "bad id")):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                Assignment(*args)
+        result = solve_cp_sat(synthetic_problem())
+        duplicate = result.assignments + (result.assignments[0],)
+        for changes in (
+            {"authorized": True},
+            {"external_actions": 1},
+            {"version": "2"},
+            {"status": "unsupported"},
+            {"status": "infeasible"},
+            {"assignments": list(result.assignments)},
+            {"assignments": duplicate},
+            {"objective": -1},
+            {"objective": True},
+            {"elapsed_ms": math.nan},
+            {"elapsed_ms": -1.0},
+            {"solver": "other"},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                replace(result, **changes)
+
+    def test_nonfeasible_receipt_cannot_carry_allocation(self):
+        safe = AllocationResult("infeasible", (), 0, 0.0, "ortools-cp-sat-9.15.6755")
+        self.assertFalse(safe.authorized)
+        self.assertEqual(safe.external_actions, 0)
+        with self.assertRaises(ValueError):
+            replace(safe, assignments=(Assignment("t1", "r1"),))
+        with self.assertRaises(ValueError):
+            replace(safe, objective=1)
 
     def test_benchmark_reports_aggregate_reproducible_evidence(self):
         report = benchmark_allocation(repeats=5)
