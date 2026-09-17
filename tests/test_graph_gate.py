@@ -46,6 +46,7 @@ class GateTests(unittest.TestCase):
     def assess(self,p=None,now=NOW): return self.gate.assess(p or self.p,now=now)
     def test_never_executes(self):
         v=self.assess();self.assertEqual(v.status,"recommendation");self.assertFalse(v.execute)
+        self.assertFalse(v.authorized);self.assertEqual(v.external_actions,0)
     def test_simulate_no_executor(self):
         self.assertFalse(self.assess(replace(self.p,mode="simulate")).execute)
     def test_partition(self): self.assertEqual(self.assess(replace(self.p,partition="p2")).status,"denied")
@@ -63,9 +64,26 @@ class GateTests(unittest.TestCase):
     def test_bad_gate_settings(self):
         for value in (0,-1,math.nan,math.inf,True,"1"):
             with self.subTest(value=value),self.assertRaises(ValueError): ProposalGate(self.g,max_age_seconds=value)
+    def test_verdict_direct_reconstruction_fails_closed(self):
+        verdict=self.assess()
+        for changes in (
+            {"execute":True},
+            {"authorized":True},
+            {"external_actions":1},
+            {"version":"2"},
+            {"status":"unknown"},
+            {"status":"abstain"},
+            {"reason":"missing_record"},
+            {"proposal_id":"bad id"},
+        ):
+            with self.subTest(changes=changes),self.assertRaises(ValueError):
+                replace(verdict,**changes)
+        safe=replace(verdict,status="abstain",reason="insufficient_score")
+        self.assertFalse(safe.execute);self.assertFalse(safe.authorized);self.assertEqual(safe.external_actions,0)
     def test_digest(self):
         v=self.assess();a=audit_digest(v)
         self.assertEqual(a,audit_digest(v));self.assertNotEqual(a,audit_digest(v,a))
-        self.assertNotEqual(a,audit_digest(replace(v,status="abstain")))
+        changed=replace(v,status="abstain",reason="insufficient_score")
+        self.assertNotEqual(a,audit_digest(changed))
     def test_digest_validation(self):
         with self.assertRaises(ValueError): audit_digest(self.assess(),"bad")
