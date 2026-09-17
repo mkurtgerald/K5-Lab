@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from threading import Event
+from threading import Event, RLock
 from time import monotonic
 from typing import Callable, Protocol
 
@@ -64,8 +64,10 @@ class InteractionLimits:
 class CancellationFlag:
     def __init__(self) -> None:
         self._event = Event()
+
     def cancel(self) -> None:
         self._event.set()
+
     @property
     def cancelled(self) -> bool:
         return self._event.is_set()
@@ -203,30 +205,56 @@ class InteractionResult:
     def __post_init__(self) -> None:
         if self.status not in _RESULT:
             raise ValueError("unsupported interaction result")
-        token(self.reason); token(self.request_id)
+        token(self.reason)
+        token(self.request_id)
         if self.authorized is not False or self.execute is not False or self.external_actions != 0:
             raise ValueError("interaction cannot grant execution authority")
 
 
 class InteractionSession:
+    """One bounded interaction session.
+
+    Calls are intentionally serialized per session so request replay checks,
+    context selection and resource accounting are atomic relative to one
+    another. Provider cancellation/timeouts remain cooperative; a private
+    adapter must honor the supplied deadline/cancellation contract.
+    """
+
     def __init__(self, *, partition: str, session_id: str, limits: InteractionLimits = InteractionLimits()) -> None:
-        self.partition = token(partition); self.session_id = token(session_id)
+        self.partition = token(partition)
+        self.session_id = token(session_id)
         if not isinstance(limits, InteractionLimits):
             raise ValueError("limits required")
         self.limits = limits
         self._turns: list[Turn] = []
         self._attempted: set[str] = set()
-        self._calls = 0; self._tokens = 0; self._elapsed = 0.0
+        self._calls = 0
+        self._tokens = 0
+        self._elapsed = 0.0
+        self._lock = RLock()
 
     @property
-    def calls_used(self) -> int: return self._calls
+    def calls_used(self) -> int:
+        with self._lock:
+            return self._calls
+
     @property
-    def tokens_used(self) -> int: return self._tokens
+    def tokens_used(self) -> int:
+        with self._lock:
+            return self._tokens
+
     @property
-    def elapsed_seconds(self) -> float: return self._elapsed
-    def turns(self) -> tuple[Turn, ...]: return tuple(self._turns)
+    def elapsed_seconds(self) -> float:
+        with self._lock:
+            return self._elapsed
+
+    def turns(self) -> tuple[Turn, ...]:
+        with self._lock:
+            return tuple(self._turns)
+
     def _result(self, item: InteractionInput, status: str, reason: str, text: str = "") -> InteractionResult:
-        return InteractionResult(status, reason, item.request_id, text, item.evidence_refs, item.action, self._calls, self._tokens, self._elapsed)
+        with self._lock:
+            return InteractionResult(status, reason, item.request_id, text, item.evidence_refs, item.action, self._calls, self._tokens, self._elapsed)
 
 
 def _bytes(message: ProviderMessage) -> int:
@@ -236,71 +264,112 @@ def _bytes(message: ProviderMessage) -> int:
 def _context(session: InteractionSession, current: ProviderMessage) -> tuple[ProviderMessage, ...] | None:
     if _bytes(current) > session.limits.max_context_chars:
         return None
-    chosen: list[Turn] = []; count = 1; chars = _bytes(current)
-    for turn in reversed(session.turns()):
+    chosen: list[Turn] = []
+    count = 1
+    chars = _bytes(current)
+    for turn in reversed(session._turns):
         pair_chars = _bytes(turn.user) + _bytes(turn.assistant)
         if count + 2 > session.limits.max_context_messages or chars + pair_chars > session.limits.max_context_chars:
             break
-        chosen.append(turn); count += 2; chars += pair_chars
+        chosen.append(turn)
+        count += 2
+        chars += pair_chars
     messages: list[ProviderMessage] = []
-    for turn in reversed(chosen): messages.extend((turn.user, turn.assistant))
+    for turn in reversed(chosen):
+        messages.extend((turn.user, turn.assistant))
     messages.append(current)
     return tuple(messages)
 
 
-def run_interaction_turn(session: InteractionSession, item: InteractionInput, provider: TextProvider, *, cancellation: CancellationFlag | None = None, clock: Callable[[], float] = monotonic) -> InteractionResult:
-    """Run one cooperative bounded call; only successful turns enter context."""
-    if item.partition != session.partition or item.session_id != session.session_id:
-        return session._result(item, "error", "session_scope_mismatch")
-    if len(item.text) > session.limits.max_turn_chars:
-        return session._result(item, "budget_exhausted", "turn_char_limit")
-    cancel = cancellation or CancellationFlag()
-    if cancel.cancelled: return session._result(item, "cancelled", "cancelled_before_call")
-    if item.request_id in session._attempted: return session._result(item, "error", "duplicate_request")
-    if session._calls >= session.limits.max_calls: return session._result(item, "budget_exhausted", "call_limit")
-    if session._elapsed >= session.limits.max_total_seconds: return session._result(item, "budget_exhausted", "time_budget")
+def run_interaction_turn(
+    session: InteractionSession,
+    item: InteractionInput,
+    provider: TextProvider,
+    *,
+    cancellation: CancellationFlag | None = None,
+    clock: Callable[[], float] = monotonic,
+) -> InteractionResult:
+    """Run one cooperative bounded call; only successful turns enter context.
 
-    current = ProviderMessage("user", item.text, item.evidence_refs, item.action.status)
-    messages = _context(session, current)
-    if messages is None: return session._result(item, "budget_exhausted", "context_char_limit")
-    local_input = sum(max(1, _bytes(message)) for message in messages)
-    if local_input + session.limits.max_output_tokens > session.limits.max_total_tokens - session._tokens:
-        return session._result(item, "budget_exhausted", "token_budget_preflight")
+    The complete turn is serialized by the session lock. This intentionally
+    prevents concurrent duplicate delivery or concurrent budget oversubscription
+    from causing multiple provider calls for one session.
+    """
+    if not isinstance(session, InteractionSession):
+        raise ValueError("interaction session required")
+    if not isinstance(item, InteractionInput):
+        raise ValueError("interaction input required")
 
-    try: start = float(clock())
-    except Exception: return session._result(item, "error", "clock_failure")
-    if not isfinite(start): return session._result(item, "error", "clock_failure")
-    allowed = min(session.limits.per_call_timeout_seconds, session.limits.max_total_seconds - session._elapsed)
-    request = ProviderRequest(item.request_id, messages, session.limits.max_output_tokens, start + allowed, cancel)
-    session._attempted.add(item.request_id); session._calls += 1
-    try:
-        reply = provider.complete(request)
-    except Exception:
-        try: end = float(clock())
-        except Exception: end = start
-        if isfinite(end) and end >= start: session._elapsed += end - start
-        return session._result(item, "error", "provider_exception")
-    try: end = float(clock())
-    except Exception: return session._result(item, "error", "clock_failure")
-    if not isfinite(end) or end < start: return session._result(item, "error", "clock_regression")
-    session._elapsed += end - start
-    if not isinstance(reply, ProviderReply): return session._result(item, "error", "invalid_provider_reply")
+    with session._lock:
+        if item.partition != session.partition or item.session_id != session.session_id:
+            return session._result(item, "error", "session_scope_mismatch")
+        if len(item.text) > session.limits.max_turn_chars:
+            return session._result(item, "budget_exhausted", "turn_char_limit")
+        cancel = cancellation or CancellationFlag()
+        if cancel.cancelled:
+            return session._result(item, "cancelled", "cancelled_before_call")
+        if item.request_id in session._attempted:
+            return session._result(item, "error", "duplicate_request")
+        if session._calls >= session.limits.max_calls:
+            return session._result(item, "budget_exhausted", "call_limit")
+        if session._elapsed >= session.limits.max_total_seconds:
+            return session._result(item, "budget_exhausted", "time_budget")
 
-    local_output = len(reply.text.encode()) if reply.text else 0
-    effective_output = max(local_output, reply.output_tokens)
-    charged = max(local_input, reply.input_tokens) + effective_output
-    session._tokens += charged
-    if cancel.cancelled: return session._result(item, "cancelled", "cancelled_during_call")
-    if end >= request.deadline_monotonic or session._elapsed > session.limits.max_total_seconds:
-        return session._result(item, "timeout", "provider_timeout")
-    if effective_output > session.limits.max_output_tokens:
-        return session._result(item, "error", "provider_output_token_limit")
-    if len(reply.text) > session.limits.max_output_chars:
-        return session._result(item, "error", "provider_output_char_limit")
-    if session._tokens > session.limits.max_total_tokens:
-        return session._result(item, "budget_exhausted", "reported_token_budget")
-    if reply.status != "ok": return session._result(item, reply.status, reply.reason)
+        current = ProviderMessage("user", item.text, item.evidence_refs, item.action.status)
+        messages = _context(session, current)
+        if messages is None:
+            return session._result(item, "budget_exhausted", "context_char_limit")
+        local_input = sum(max(1, _bytes(message)) for message in messages)
+        if local_input + session.limits.max_output_tokens > session.limits.max_total_tokens - session._tokens:
+            return session._result(item, "budget_exhausted", "token_budget_preflight")
 
-    assistant = ProviderMessage("assistant", reply.text)
-    session._turns.append(Turn(item.request_id, current, assistant, charged))
-    return session._result(item, "ok", reply.reason, reply.text)
+        try:
+            start = float(clock())
+        except Exception:
+            return session._result(item, "error", "clock_failure")
+        if not isfinite(start):
+            return session._result(item, "error", "clock_failure")
+        allowed = min(session.limits.per_call_timeout_seconds, session.limits.max_total_seconds - session._elapsed)
+        request = ProviderRequest(item.request_id, messages, session.limits.max_output_tokens, start + allowed, cancel)
+        session._attempted.add(item.request_id)
+        session._calls += 1
+        try:
+            reply = provider.complete(request)
+        except Exception:
+            try:
+                end = float(clock())
+            except Exception:
+                end = start
+            if isfinite(end) and end >= start:
+                session._elapsed += end - start
+            return session._result(item, "error", "provider_exception")
+        try:
+            end = float(clock())
+        except Exception:
+            return session._result(item, "error", "clock_failure")
+        if not isfinite(end) or end < start:
+            return session._result(item, "error", "clock_regression")
+        session._elapsed += end - start
+        if not isinstance(reply, ProviderReply):
+            return session._result(item, "error", "invalid_provider_reply")
+
+        local_output = len(reply.text.encode()) if reply.text else 0
+        effective_output = max(local_output, reply.output_tokens)
+        charged = max(local_input, reply.input_tokens) + effective_output
+        session._tokens += charged
+        if cancel.cancelled:
+            return session._result(item, "cancelled", "cancelled_during_call")
+        if end >= request.deadline_monotonic or session._elapsed > session.limits.max_total_seconds:
+            return session._result(item, "timeout", "provider_timeout")
+        if effective_output > session.limits.max_output_tokens:
+            return session._result(item, "error", "provider_output_token_limit")
+        if len(reply.text) > session.limits.max_output_chars:
+            return session._result(item, "error", "provider_output_char_limit")
+        if session._tokens > session.limits.max_total_tokens:
+            return session._result(item, "budget_exhausted", "reported_token_budget")
+        if reply.status != "ok":
+            return session._result(item, reply.status, reply.reason)
+
+        assistant = ProviderMessage("assistant", reply.text)
+        session._turns.append(Turn(item.request_id, current, assistant, charged))
+        return session._result(item, "ok", reply.reason, reply.text)
