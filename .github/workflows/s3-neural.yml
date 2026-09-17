@@ -66,25 +66,26 @@ jobs:
           import torch
 
           from mosaic_lab.policy_adapter import evaluate_policy_proposal
-          from mosaic_lab.simulation import (
-              BoundedProposalEnv,
-              allowed_actions,
-              run_baseline_episode,
-          )
+          from mosaic_lab.simulation import BoundedProposalEnv, allowed_actions, run_baseline_episode
 
           TRAIN_SEED = 41
           ACCEPTANCE_SEEDS = (101, 103, 107, 109, 113)
-          HORIZON = 64
+          STRESS_SEEDS = (127, 131, 137, 139, 149, 151, 157, 163)
+          TRAIN_HORIZON = 64
+          STRESS_HORIZON = 128
           TRAIN_TIMESTEPS = 8192
           MAX_TRAIN_SECONDS = 300.0
           MAX_RSS_DELTA_KIB = 800000
+          MAX_P95_INFERENCE_MS = 5.0
+          MIN_HEURISTIC_RATIO = 0.95
+          MIN_CP_SAT_RATIO = 0.90
 
           torch.set_num_threads(1)
           torch.manual_seed(TRAIN_SEED)
           torch.use_deterministic_algorithms(True)
           np.random.seed(TRAIN_SEED)
 
-          train_env = BoundedProposalEnv(horizon=HORIZON)
+          train_env = BoundedProposalEnv(horizon=TRAIN_HORIZON)
           rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
           started = perf_counter()
           model = DQN(
@@ -117,10 +118,14 @@ jobs:
           if rss_delta_kib > MAX_RSS_DELTA_KIB:
               raise RuntimeError(f"training exceeded RSS budget: {rss_delta_kib} KiB")
 
-          def evaluate_once():
+          def predictor(value):
+              action, _ = model.predict(value, deterministic=True)
+              return action
+
+          def evaluate_seeds(seeds, *, horizon):
               episodes = []
-              for seed in ACCEPTANCE_SEEDS:
-                  env = BoundedProposalEnv(horizon=HORIZON)
+              for seed in seeds:
+                  env = BoundedProposalEnv(horizon=horizon)
                   observation, _ = env.reset(seed=seed)
                   total_reward = 0.0
                   latencies_ms = []
@@ -129,11 +134,6 @@ jobs:
                   executed_actions = []
                   while True:
                       permitted = allowed_actions(observation)
-
-                      def predictor(value):
-                          action, _ = model.predict(value, deterministic=True)
-                          return action
-
                       decision_started = perf_counter()
                       receipt = evaluate_policy_proposal(
                           predictor,
@@ -149,6 +149,8 @@ jobs:
                           fallbacks += 1
                       if receipt.authorized or receipt.external_actions:
                           raise RuntimeError("learned proposal receipt crossed authority boundary")
+                      if receipt.executed_action not in permitted:
+                          raise RuntimeError("adapter executed an action outside the caller boundary")
                       executed_actions.append(receipt.executed_action)
                       observation, reward, terminated, truncated, info = env.step(receipt.executed_action)
                       total_reward += reward
@@ -185,46 +187,115 @@ jobs:
                   for item in episodes
               )
 
-          first = evaluate_once()
-          second = evaluate_once()
-          if deterministic_signature(first) != deterministic_signature(second):
-              raise RuntimeError("deterministic learned-policy replay diverged")
+          acceptance_first = evaluate_seeds(ACCEPTANCE_SEEDS, horizon=TRAIN_HORIZON)
+          acceptance_second = evaluate_seeds(ACCEPTANCE_SEEDS, horizon=TRAIN_HORIZON)
+          stress_first = evaluate_seeds(STRESS_SEEDS, horizon=STRESS_HORIZON)
+          stress_second = evaluate_seeds(STRESS_SEEDS, horizon=STRESS_HORIZON)
+          if deterministic_signature(acceptance_first) != deterministic_signature(acceptance_second):
+              raise RuntimeError("deterministic acceptance replay diverged")
+          if deterministic_signature(stress_first) != deterministic_signature(stress_second):
+              raise RuntimeError("deterministic long-horizon stress replay diverged")
 
-          learned_rewards = [float(item["reward"]) for item in first]
-          learned_p95 = [float(item["p95_inference_ms"]) for item in first]
-          total_fallbacks = sum(int(item["fallbacks"]) for item in first)
-          heuristic = [
-              run_baseline_episode(policy="heuristic", seed=seed, horizon=HORIZON)
-              for seed in ACCEPTANCE_SEEDS
-          ]
-          cp_sat = [
-              run_baseline_episode(policy="cp_sat", seed=seed, horizon=HORIZON)
-              for seed in ACCEPTANCE_SEEDS
-          ]
-          learned_mean = mean(learned_rewards)
-          heuristic_mean = mean(float(item["total_reward"]) for item in heuristic)
-          cp_sat_mean = mean(float(item["total_reward"]) for item in cp_sat)
+          boundary_observations = (
+              np.asarray([-1.0, -1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+              np.asarray([1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float32),
+              np.asarray([1.0, -1.0, 1.0, 0.0, 0.5], dtype=np.float32),
+              np.asarray([-1.0, 1.0, 0.0, 1.0, 0.5], dtype=np.float32),
+          )
+          scarcity_receipts = []
+          for observation in boundary_observations:
+              for permitted in ((0,), allowed_actions(observation)):
+                  receipt = evaluate_policy_proposal(
+                      predictor,
+                      observation,
+                      allowed_actions=permitted,
+                      action_count=3,
+                      fallback_action=0,
+                  )
+                  if receipt.executed_action not in permitted:
+                      raise RuntimeError("boundary stress escaped allowed actions")
+                  if receipt.authorized or receipt.external_actions:
+                      raise RuntimeError("boundary stress crossed authority boundary")
+                  scarcity_receipts.append(receipt)
+
+          malformed_predictors = (
+              lambda _: (_ for _ in ()).throw(RuntimeError("synthetic predictor failure")),
+              lambda _: True,
+              lambda _: np.asarray([1, 2], dtype=np.int64),
+              lambda _: np.asarray([np.nan]),
+          )
+          failure_reasons = []
+          for broken_predictor in malformed_predictors:
+              receipt = evaluate_policy_proposal(
+                  broken_predictor,
+                  boundary_observations[0],
+                  allowed_actions=(0,),
+                  action_count=3,
+                  fallback_action=0,
+              )
+              if receipt.accepted or receipt.executed_action != 0:
+                  raise RuntimeError("malformed predictor did not fail closed")
+              if receipt.authorized or receipt.external_actions:
+                  raise RuntimeError("malformed predictor crossed authority boundary")
+              failure_reasons.append(receipt.fallback_reason)
+
+          def baseline_rewards(policy, seeds, *, horizon):
+              return [
+                  float(run_baseline_episode(policy=policy, seed=seed, horizon=horizon)["total_reward"])
+                  for seed in seeds
+              ]
+
+          acceptance_rewards = [float(item["reward"]) for item in acceptance_first]
+          stress_rewards = [float(item["reward"]) for item in stress_first]
+          acceptance_heuristic = baseline_rewards("heuristic", ACCEPTANCE_SEEDS, horizon=TRAIN_HORIZON)
+          acceptance_cp_sat = baseline_rewards("cp_sat", ACCEPTANCE_SEEDS, horizon=TRAIN_HORIZON)
+          stress_heuristic = baseline_rewards("heuristic", STRESS_SEEDS, horizon=STRESS_HORIZON)
+          stress_cp_sat = baseline_rewards("cp_sat", STRESS_SEEDS, horizon=STRESS_HORIZON)
+
+          learned_acceptance_mean = mean(acceptance_rewards)
+          learned_stress_mean = mean(stress_rewards)
+          heuristic_stress_mean = mean(stress_heuristic)
+          cp_sat_stress_mean = mean(stress_cp_sat)
+          heuristic_ratio = learned_stress_mean / heuristic_stress_mean if heuristic_stress_mean else 1.0
+          cp_sat_ratio = learned_stress_mean / cp_sat_stress_mean if cp_sat_stress_mean else 1.0
+          max_p95 = max(float(item["p95_inference_ms"]) for item in acceptance_first + stress_first)
+          total_fallbacks = sum(int(item["fallbacks"]) for item in acceptance_first + stress_first)
 
           evidence = {
               "algorithm": "DQN",
               "training_seed": TRAIN_SEED,
               "acceptance_seeds": ACCEPTANCE_SEEDS,
+              "stress_seeds": STRESS_SEEDS,
+              "training_horizon": TRAIN_HORIZON,
+              "stress_horizon": STRESS_HORIZON,
               "timesteps": TRAIN_TIMESTEPS,
               "train_seconds": round(train_seconds, 6),
               "rss_delta_kib": rss_delta_kib,
-              "learned_mean_reward": round(learned_mean, 6),
-              "heuristic_mean_reward": round(heuristic_mean, 6),
-              "cp_sat_mean_reward": round(cp_sat_mean, 6),
-              "learned_to_heuristic_ratio": round(learned_mean / heuristic_mean, 6) if heuristic_mean else None,
-              "learned_max_p95_inference_ms": round(max(learned_p95), 6),
-              "fallbacks": total_fallbacks,
+              "acceptance_learned_mean_reward": round(learned_acceptance_mean, 6),
+              "acceptance_heuristic_mean_reward": round(mean(acceptance_heuristic), 6),
+              "acceptance_cp_sat_mean_reward": round(mean(acceptance_cp_sat), 6),
+              "stress_learned_mean_reward": round(learned_stress_mean, 6),
+              "stress_heuristic_mean_reward": round(heuristic_stress_mean, 6),
+              "stress_cp_sat_mean_reward": round(cp_sat_stress_mean, 6),
+              "stress_to_heuristic_ratio": round(heuristic_ratio, 6),
+              "stress_to_cp_sat_ratio": round(cp_sat_ratio, 6),
+              "learned_max_p95_inference_ms": round(max_p95, 6),
+              "episode_fallbacks": total_fallbacks,
+              "boundary_stress_receipts": len(scarcity_receipts),
+              "failure_reasons": tuple(failure_reasons),
               "constraint_violations": 0,
               "deterministic_replay": True,
               "authorized": False,
               "external_actions": 0,
               "saved_policy": False,
           }
-          if learned_mean <= 0.0:
+          if learned_acceptance_mean <= 0.0:
               raise RuntimeError(f"DQN candidate failed to improve on no-op: {evidence}")
+          if heuristic_ratio < MIN_HEURISTIC_RATIO:
+              raise RuntimeError(f"DQN stress quality fell below heuristic floor: {evidence}")
+          if cp_sat_ratio < MIN_CP_SAT_RATIO:
+              raise RuntimeError(f"DQN stress quality fell below CP-SAT floor: {evidence}")
+          if max_p95 > MAX_P95_INFERENCE_MS:
+              raise RuntimeError(f"DQN inference exceeded p95 budget: {evidence}")
           print(evidence)
           PY
