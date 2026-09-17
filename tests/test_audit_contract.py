@@ -6,6 +6,7 @@ from mosaic_lab.audit import AuditBuffer, AuditEvent
 from mosaic_lab.retrieval import ReadScope
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+EVIDENCE_DIGEST = "d" * 64
 
 
 def scope(**changes):
@@ -39,6 +40,7 @@ def event(event_id="event1", **changes):
         approval_ref="approval1",
         outcome="denied",
         recorded_at=NOW,
+        evidence_digests=(EVIDENCE_DIGEST,),
     )
     values.update(changes)
     return AuditEvent(**values)
@@ -54,8 +56,10 @@ class AuditContractTests(unittest.TestCase):
         self.assertEqual(item.model_revision, "model1")
         self.assertEqual(item.tool_revision, "tool1")
         self.assertEqual(item.evidence_refs, ("rec1",))
+        self.assertEqual(item.evidence_digests, (EVIDENCE_DIGEST,))
         self.assertEqual(item.approval_ref, "approval1")
         self.assertEqual(item.outcome, "denied")
+        self.assertEqual(item.version, "2")
         self.assertFalse(hasattr(item, "reasoning"))
         self.assertFalse(hasattr(item, "details"))
 
@@ -84,6 +88,8 @@ class AuditContractTests(unittest.TestCase):
         buffer.append(event())
         with self.assertRaises(ValueError):
             buffer.append(event(reason="different_reason"))
+        with self.assertRaises(ValueError):
+            buffer.append(event(evidence_digests=("e" * 64,)))
 
     def test_capacity_fails_closed_without_eviction_and_claims_remain_honest(self):
         buffer = AuditBuffer(max_entries=1)
@@ -123,11 +129,17 @@ class AuditContractTests(unittest.TestCase):
         unauthenticated = buffer.read_partition("p1", scope(authenticated=False), current_policy_revision="policy1", now=NOW)
         self.assertEqual((unauthenticated.status, unauthenticated.reason), ("denied", "audit_unauthenticated"))
 
-    def test_tokens_bounds_and_duplicates_fail_closed(self):
+    def test_tokens_bounds_and_evidence_binding_fail_closed(self):
         with self.assertRaises(ValueError):
             event(reason="free form secret text")
         with self.assertRaises(ValueError):
-            event(evidence_refs=("rec1", "rec1"))
+            event(evidence_refs=("rec1", "rec1"), evidence_digests=(EVIDENCE_DIGEST, EVIDENCE_DIGEST))
+        with self.assertRaises(ValueError):
+            event(evidence_digests=())
+        with self.assertRaises(ValueError):
+            event(evidence_digests=("not-a-digest",))
+        with self.assertRaises(ValueError):
+            event(version="1")
         with self.assertRaises(ValueError):
             AuditBuffer(max_entries=0)
 
