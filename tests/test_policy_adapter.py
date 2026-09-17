@@ -1,8 +1,9 @@
+from dataclasses import replace
 import unittest
 
 import numpy as np
 
-from mosaic_lab.policy_adapter import evaluate_policy_proposal
+from mosaic_lab.policy_adapter import PolicyProposalReceipt, evaluate_policy_proposal
 
 
 class PolicyAdapterTests(unittest.TestCase):
@@ -76,6 +77,40 @@ class PolicyAdapterTests(unittest.TestCase):
 
         evaluate_policy_proposal(mutate, original, allowed_actions=(0,), action_count=1)
         np.testing.assert_array_equal(original, np.asarray([0.25, 0.5], dtype=np.float32))
+
+    def test_direct_receipt_reconstruction_cannot_claim_authority_or_effects(self):
+        receipt = evaluate_policy_proposal(lambda _: 0, [0.0], allowed_actions=(0,), action_count=1)
+        for changes in (
+            {"authorized": True},
+            {"external_actions": 1},
+            {"version": "2"},
+            {"executed_action": 1},
+            {"fallback_reason": "predictor_error"},
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaises(ValueError):
+                    replace(receipt, **changes)
+
+    def test_fallback_receipt_state_must_be_internally_consistent(self):
+        valid = (
+            PolicyProposalReceipt(None, 0, False, "predictor_error"),
+            PolicyProposalReceipt(None, 0, False, "invalid_output"),
+            PolicyProposalReceipt(1, 0, False, "prohibited_action"),
+        )
+        self.assertEqual(len(valid), 3)
+        invalid = (
+            (None, 0, True, None),
+            (0, 1, True, None),
+            (0, 0, True, "predictor_error"),
+            (None, 0, False, None),
+            (1, 0, False, "invalid_output"),
+            (None, 0, False, "prohibited_action"),
+            (0, 0, False, "prohibited_action"),
+        )
+        for args in invalid:
+            with self.subTest(args=args):
+                with self.assertRaises(ValueError):
+                    PolicyProposalReceipt(*args)
 
 
 if __name__ == "__main__":
