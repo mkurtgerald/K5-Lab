@@ -154,6 +154,7 @@ def audit_event(event_id, *, decision, reason, outcome, proposal_id="prop1", app
         approval_ref=approval_ref,
         outcome=outcome,
         recorded_at=NOW,
+        evidence_digests=(evidence_record().content_digest,),
     )
 
 
@@ -221,6 +222,7 @@ class EndToEndInteractionSafetyTests(unittest.TestCase):
             now=NOW,
         )
         self.assertEqual(retrieval.status, "returned")
+        self.assertEqual(retrieval.content_digest, audit_event("binding", decision="returned", reason="evidence_returned", outcome="not_applicable").evidence_digests[0])
         self.assert_non_authorizing(retrieval)
 
         provider = Provider()
