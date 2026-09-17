@@ -319,7 +319,10 @@ def evaluate_proposal(
         raise ValueError("invalid evidence freshness limit")
 
     for record_id in proposal.evidence_refs:
-        item = evidence.get(record_id)
+        try:
+            item = evidence.get(record_id)
+        except Exception:
+            return decision("abstain", "evidence_unavailable")
         if item is None:
             return decision("abstain", "missing_evidence")
         if not isinstance(item, EvidenceRef):
