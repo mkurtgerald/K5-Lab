@@ -1,9 +1,11 @@
+from dataclasses import replace
 import unittest
 
 import numpy as np
 
 from mosaic_lab.simulation import (
     BoundedProposalEnv,
+    ProposalDecision,
     benchmark_simulation,
     filter_proposal,
     run_baseline_episode,
@@ -40,9 +42,31 @@ class SimulationTests(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.executed_action, 0)
         self.assertFalse(decision.authorized)
+        self.assertEqual(decision.external_actions, 0)
         allowed = filter_proposal(observation, 2)
         self.assertTrue(allowed.allowed)
         self.assertEqual(allowed.executed_action, 2)
+        self.assertFalse(allowed.authorized)
+        self.assertEqual(allowed.external_actions, 0)
+
+    def test_decision_direct_reconstruction_fails_closed(self):
+        fallback = ProposalDecision(2, 0, False)
+        for changes in (
+            {"authorized": True},
+            {"external_actions": 1},
+            {"version": "2"},
+            {"executed_action": 2},
+            {"proposed_action": 3},
+            {"executed_action": 3},
+            {"allowed": 1},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                replace(fallback, **changes)
+        accepted = ProposalDecision(2, 2, True)
+        with self.assertRaises(ValueError):
+            replace(accepted, executed_action=0)
+        self.assertFalse(accepted.authorized)
+        self.assertEqual(accepted.external_actions, 0)
 
     def test_nonfinite_and_malformed_observations_fail_closed(self):
         invalid = (
