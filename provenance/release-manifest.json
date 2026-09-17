@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "stage": "S7",
+  "package": {
+    "name": "mosaic-lab",
+    "version": "0.1.0"
+  },
+  "authoritative_inputs": {
+    "core": "requirements-core.txt",
+    "learned_runtime_python": "requirements-s3-runtime.txt",
+    "learned_runtime_torch": "requirements-neural.txt",
+    "component_review": "provenance/components.json",
+    "learned_runtime_evidence": "provenance/s3-rl-review.json"
+  },
+  "scopes": {
+    "core": {
+      "shipping_candidate": true,
+      "optional": false
+    },
+    "learned_policy_runtime": {
+      "shipping_candidate": false,
+      "optional": true
+    }
+  },
+  "commercial_distribution": false,
+  "production_qualified": false,
+  "owner_release_approved": false
+}

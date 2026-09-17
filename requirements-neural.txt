@@ -1,4 +1,4 @@
-# Optional. Tested here with the CPU build 2.10.0+cpu.
+# Optional isolated learned-policy runtime. Tested with the official CPU build 2.14.0+cpu.
 # Choose the official CPU wheel index when no GPU build is required.
 # This is not a complete platform-specific transitive lock or release approval.
-torch==2.10.0
+torch==2.14.0
