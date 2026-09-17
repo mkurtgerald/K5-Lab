@@ -370,4 +370,5 @@ class DelegatedSimulation:
                 unknown_steps=unknown,
             )
             self._step_receipts[step_id] = resolved
+            self._receipts[resolved.delivery_id] = resolved
             return resolved
