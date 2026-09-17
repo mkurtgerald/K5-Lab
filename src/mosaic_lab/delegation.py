@@ -77,7 +77,7 @@ class DelegatedSimulation:
         if started<utc(grant.granted_at) or started>=utc(grant.expires_at): raise ValueError("session start outside delegation lifetime")
         if isinstance(max_tracked_deliveries,bool) or not isinstance(max_tracked_deliveries,int) or not 1<=max_tracked_deliveries<=_MAX_TRACKED_DELIVERIES: raise ValueError("max_tracked_deliveries outside bounded limit")
         self._grant=grant; self._session_id=session_id; self._started_at=started; self._max_tracked_deliveries=max_tracked_deliveries
-        self._receipts={}; self._step_receipts={}; self._effect_times=[]; self._lock=Lock()
+        self._receipts={}; self._step_receipts={}; self._step_reversible={}; self._effect_times=[]; self._lock=Lock()
     def _counts(self):
         vals=self._step_receipts.values(); return (sum(x.status=="verified_complete" for x in vals),sum(x.status=="failed" for x in vals),sum(x.status=="outcome_unknown" for x in vals))
     def _receipt(self,*,status,reason,step,step_index,mocked_effects=0,rollback_available=False):
@@ -106,7 +106,7 @@ class DelegatedSimulation:
             if step.target_ref not in self._grant.allowed_targets:return self._receipt(status="denied",reason="target_out_of_scope",step=step,step_index=idx)
             cutoff=now-timedelta(seconds=60); self._effect_times=[x for x in self._effect_times if x>cutoff]
             if len(self._effect_times)>=self._grant.max_actions_per_minute:return self._receipt(status="rate_limited",reason="rate_budget",step=step,step_index=idx)
-            self._effect_times.append(now); receipt=self._receipt(status=mocked_outcome,reason="mocked_effect_recorded",step=step,step_index=idx,mocked_effects=1,rollback_available=reversible and mocked_outcome=="verified_complete")
+            self._effect_times.append(now); self._step_reversible[step.step_id]=reversible; receipt=self._receipt(status=mocked_outcome,reason="mocked_effect_recorded",step=step,step_index=idx,mocked_effects=1,rollback_available=reversible and mocked_outcome=="verified_complete")
             self._step_receipts[step.step_id]=receipt; c,f,u=self._counts(); receipt=replace(receipt,completed_steps=c,failed_steps=f,unknown_steps=u); self._step_receipts[step.step_id]=receipt; self._receipts[step.delivery_id]=receipt; return receipt
     def reconcile(self,step_id:str,*,authoritative_outcome:str,reversible:bool)->SimulationReceipt:
         token(step_id)
@@ -115,7 +115,10 @@ class DelegatedSimulation:
             prior=self._step_receipts.get(step_id)
             if prior is None: raise ValueError("cannot reconcile an unknown step")
             if prior.status!="outcome_unknown":return prior
-            resolved=replace(prior,status=authoritative_outcome,reason="reconciled",mocked_effects=0,rollback_available=reversible and authoritative_outcome=="verified_complete"); self._step_receipts[step_id]=resolved
+            original_reversible=self._step_reversible.get(step_id)
+            if original_reversible is None or reversible!=original_reversible:
+                return replace(prior,status="reconciliation_required",reason="reversibility_mismatch",mocked_effects=0,rollback_available=False)
+            resolved=replace(prior,status=authoritative_outcome,reason="reconciled",mocked_effects=0,rollback_available=original_reversible and authoritative_outcome=="verified_complete"); self._step_receipts[step_id]=resolved
             c,f,u=self._counts(); resolved=replace(resolved,completed_steps=c,failed_steps=f,unknown_steps=u); self._step_receipts[step_id]=resolved; self._receipts[resolved.delivery_id]=resolved; return resolved
 
 
@@ -224,6 +227,9 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
                     raise ValueError("cannot reconcile an unknown step")
                 if prior.status!="outcome_unknown":
                     return prior
+                original_reversible=self._step_reversible.get(step_id)
+                if original_reversible is None or reversible!=original_reversible:
+                    return replace(prior,status="reconciliation_required",reason="reversibility_mismatch",mocked_effects=0,rollback_available=False)
                 if self._audit_sink is None:
                     return replace(prior,status="reconciliation_required",reason="audit_unavailable",mocked_effects=0,rollback_available=False)
                 try:
