@@ -7,7 +7,7 @@ external effects or execution authority.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil
+from math import ceil, isfinite
 from time import perf_counter
 
 from ortools.sat.python import cp_model
@@ -19,6 +19,9 @@ MAX_RESOURCES = 32
 MAX_INTEGER = 1_000_000
 MAX_TIME_SECONDS = 5.0
 DEFAULT_TIME_SECONDS = 1.0
+MAX_RESULT_OBJECTIVE = MAX_TASKS * MAX_INTEGER
+_RESULT_STATUSES = frozenset({"optimal", "feasible", "infeasible", "invalid", "unknown"})
+_SOLVER_IDS = frozenset({"ortools-cp-sat-9.15.6755", "deterministic-greedy-v1"})
 
 
 def _bounded_int(name: str, value: int, *, minimum: int = 0) -> int:
@@ -86,6 +89,10 @@ class Assignment:
     task_id: str
     resource_id: str
 
+    def __post_init__(self) -> None:
+        token(self.task_id)
+        token(self.resource_id)
+
 
 @dataclass(frozen=True)
 class AllocationResult:
@@ -94,6 +101,35 @@ class AllocationResult:
     objective: int
     elapsed_ms: float
     solver: str
+    authorized: bool = False
+    external_actions: int = 0
+    version: str = "1"
+
+    def __post_init__(self) -> None:
+        if self.status not in _RESULT_STATUSES:
+            raise ValueError("unsupported allocation result status")
+        if not isinstance(self.assignments, tuple) or len(self.assignments) > MAX_TASKS:
+            raise ValueError("bounded immutable assignments required")
+        if not all(isinstance(item, Assignment) for item in self.assignments):
+            raise ValueError("invalid assignment")
+        if len({item.task_id for item in self.assignments}) != len(self.assignments):
+            raise ValueError("duplicate task assignment")
+        if isinstance(self.objective, bool) or not isinstance(self.objective, int):
+            raise ValueError("objective must be an integer")
+        if not 0 <= self.objective <= MAX_RESULT_OBJECTIVE:
+            raise ValueError("objective out of range")
+        if isinstance(self.elapsed_ms, bool) or not isinstance(self.elapsed_ms, (int, float)):
+            raise ValueError("elapsed_ms must be numeric")
+        if not isfinite(float(self.elapsed_ms)) or float(self.elapsed_ms) < 0.0:
+            raise ValueError("elapsed_ms out of range")
+        if self.solver not in _SOLVER_IDS:
+            raise ValueError("unsupported solver receipt")
+        if self.version != "1":
+            raise ValueError("unsupported allocation result version")
+        if self.authorized is not False or self.external_actions != 0:
+            raise ValueError("allocation results have no execution authority")
+        if self.status not in {"optimal", "feasible"} and (self.assignments or self.objective != 0):
+            raise ValueError("non-feasible result cannot contain an allocation")
 
 
 _STATUS = {

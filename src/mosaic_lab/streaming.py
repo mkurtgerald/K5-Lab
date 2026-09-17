@@ -91,18 +91,30 @@ class StreamOutcome:
     model_id: str = MODEL_ID
     kind: str = "prediction"
     authorized: bool = False
+    external_actions: int = 0
+    version: str = "1"
 
     def __post_init__(self) -> None:
         token(self.partition)
         token(self.sample_id)
         unit_score(self.score)
-        if self.kind != "prediction" or self.authorized is not False:
+        if self.model_id != MODEL_ID:
+            raise ValueError("unsupported model receipt")
+        if self.kind != "prediction":
+            raise ValueError("unsupported stream outcome kind")
+        if self.version != "1":
+            raise ValueError("unsupported stream outcome version")
+        if self.authorized is not False or self.external_actions != 0:
             raise ValueError("stream outcomes have no execution authority")
         if not isinstance(self.predicted, bool) or not isinstance(self.abstained, bool):
             raise ValueError("invalid prediction flags")
         if not isinstance(self.drift_detected, bool):
             raise ValueError("invalid drift flag")
-        if isinstance(self.update_index, bool) or not isinstance(self.update_index, int) or self.update_index < 0:
+        if (
+            isinstance(self.update_index, bool)
+            or not isinstance(self.update_index, int)
+            or not 0 <= self.update_index <= MAX_UPDATES
+        ):
             raise ValueError("invalid update index")
 
 

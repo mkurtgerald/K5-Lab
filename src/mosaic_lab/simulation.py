@@ -65,6 +65,22 @@ class ProposalDecision:
     executed_action: int
     allowed: bool
     authorized: bool = False
+    external_actions: int = 0
+    version: str = SIMULATION_VERSION
+
+    def __post_init__(self) -> None:
+        proposed = _action(self.proposed_action)
+        executed = _action(self.executed_action)
+        if not isinstance(self.allowed, bool):
+            raise ValueError("allowed must be boolean")
+        if self.version != SIMULATION_VERSION:
+            raise ValueError("unsupported proposal decision version")
+        if self.authorized is not False or self.external_actions != 0:
+            raise ValueError("proposal decisions have no execution authority")
+        if self.allowed and executed != proposed:
+            raise ValueError("allowed proposal must preserve proposed action")
+        if not self.allowed and executed != 0:
+            raise ValueError("prohibited proposal must fall back to no-op")
 
 
 def allowed_actions(observation: np.ndarray) -> tuple[int, ...]:
@@ -80,7 +96,7 @@ def allowed_actions(observation: np.ndarray) -> tuple[int, ...]:
 def filter_proposal(observation: np.ndarray, proposed_action: int) -> ProposalDecision:
     action = _action(proposed_action)
     permitted = action in allowed_actions(observation)
-    return ProposalDecision(action, action if permitted else 0, permitted, False)
+    return ProposalDecision(action, action if permitted else 0, permitted)
 
 
 def action_utility(observation: np.ndarray, action: int) -> float:

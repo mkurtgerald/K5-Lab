@@ -4,8 +4,23 @@ from datetime import datetime
 from hashlib import sha256
 import json
 from math import isfinite
-from .contracts import Proposal, utc, unit_score
+from .contracts import Proposal, token, utc, unit_score
 from .graph import RecordGraph
+
+
+_VERDICT_REASONS = {
+    "denied": frozenset({"partition_mismatch", "unsupported_operation"}),
+    "abstain": frozenset(
+        {
+            "missing_record",
+            "future_timestamp",
+            "stale_input",
+            "proposal_precedes_record",
+            "insufficient_score",
+        }
+    ),
+    "recommendation": frozenset({"non_executing_only"}),
+}
 
 
 @dataclass(frozen=True)
@@ -14,6 +29,20 @@ class Verdict:
     reason: str
     proposal_id: str
     execute: bool = False
+    authorized: bool = False
+    external_actions: int = 0
+    version: str = "1"
+
+    def __post_init__(self) -> None:
+        if self.status not in _VERDICT_REASONS:
+            raise ValueError("unsupported verdict status")
+        if self.reason not in _VERDICT_REASONS[self.status]:
+            raise ValueError("verdict reason inconsistent with status")
+        token(self.proposal_id)
+        if self.version != "1":
+            raise ValueError("unsupported verdict version")
+        if self.execute is not False or self.authorized is not False or self.external_actions != 0:
+            raise ValueError("verdicts have no execution authority")
 
 
 class ProposalGate:

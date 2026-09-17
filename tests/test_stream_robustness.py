@@ -1,6 +1,12 @@
 import unittest
+from unittest.mock import patch
 
-from mosaic_lab.stream_robustness import evaluate_stream_robustness
+from mosaic_lab.stream_robustness import (
+    DEFAULT_ROBUSTNESS_SEEDS,
+    evaluate_stream_robustness,
+    evaluate_stream_robustness_multiseed,
+    require_stream_robustness_acceptance,
+)
 from mosaic_lab.streaming import RiverBinaryAdapter, StreamSample
 from datetime import datetime, timezone
 
@@ -13,11 +19,37 @@ class StreamRobustnessTests(unittest.TestCase):
         self.assertFalse(result["performance_gate_established"])
         self.assertTrue(result["poisoning_stops_before_evaluation"])
         self.assertGreater(result["poisoned_training_samples"], 0)
+        self.assertGreater(result["cold_start_updates"], 0)
         self.assertGreater(result["rare_clean"]["count"], 0)
-        for group in ("clean", "poisoned_history"):
+        for group in ("clean", "poisoned_history", "cold_start"):
             for key, value in result[group].items():
                 self.assertGreaterEqual(value, 0.0, key)
                 self.assertLessEqual(value, 1.0, key)
+
+    def test_multiseed_robustness_acceptance_is_enforced_and_non_executing(self):
+        result = require_stream_robustness_acceptance(size=600)
+        self.assertEqual(result["external_actions"], 0)
+        self.assertFalse(result["production_qualified"])
+        self.assertTrue(result["performance_gate_established"])
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["seeds"], DEFAULT_ROBUSTNESS_SEEDS)
+        self.assertEqual(len(result["runs"]), len(DEFAULT_ROBUSTNESS_SEEDS))
+        self.assertGreaterEqual(
+            result["summary"]["total_rare_samples"],
+            result["criteria"]["min_total_rare_samples"],
+        )
+        for key, value in result["summary"].items():
+            if key != "total_rare_samples":
+                self.assertGreaterEqual(value, 0.0, key)
+                self.assertLessEqual(value, 1.0, key)
+
+    def test_acceptance_wrapper_fails_closed_when_measurement_fails(self):
+        with patch(
+            "mosaic_lab.stream_robustness.evaluate_stream_robustness_multiseed",
+            return_value={"passed": False},
+        ):
+            with self.assertRaises(RuntimeError):
+                require_stream_robustness_acceptance()
 
     def test_invalid_robustness_parameters_fail_closed(self):
         for interval in (True, 0, 4, 101):
@@ -28,6 +60,10 @@ class StreamRobustnessTests(unittest.TestCase):
             with self.subTest(threshold=threshold):
                 with self.assertRaises(ValueError):
                     evaluate_stream_robustness(size=400, rare_abs_feature=threshold)
+        for seeds in ((7, 19), (7, 7, 19), (True, 7, 19), (7, -1, 19), [7, 19, 31]):
+            with self.subTest(seeds=seeds):
+                with self.assertRaises(ValueError):
+                    evaluate_stream_robustness_multiseed(size=400, seeds=seeds)
 
     def test_missing_and_nonfinite_features_are_rejected_without_update(self):
         adapter = RiverBinaryAdapter("p1", feature_count=2)

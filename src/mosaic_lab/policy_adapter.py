@@ -13,6 +13,18 @@ import numpy as np
 
 MAX_OBSERVATION_ITEMS = 64
 MAX_ACTIONS = 32
+FALLBACK_REASONS = frozenset({"predictor_error", "invalid_output", "prohibited_action"})
+
+
+def _receipt_action(value: object, *, name: str, optional: bool = False) -> int | None:
+    if optional and value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{name} must be an integer action")
+    action = int(value)
+    if not 0 <= action < MAX_ACTIONS:
+        raise ValueError(f"{name} out of range")
+    return action
 
 
 @dataclass(frozen=True)
@@ -23,6 +35,34 @@ class PolicyProposalReceipt:
     fallback_reason: str | None
     authorized: bool = False
     external_actions: int = 0
+    version: str = "1"
+
+    def __post_init__(self) -> None:
+        proposed = _receipt_action(self.proposed_action, name="proposed_action", optional=True)
+        executed = _receipt_action(self.executed_action, name="executed_action")
+        if not isinstance(self.accepted, bool):
+            raise ValueError("accepted must be boolean")
+        if self.version != "1":
+            raise ValueError("unsupported policy proposal receipt version")
+        if self.authorized is not False:
+            raise ValueError("policy proposal receipts cannot grant authorization")
+        if type(self.external_actions) is not int or self.external_actions != 0:
+            raise ValueError("policy proposal receipts cannot record external actions")
+
+        if self.accepted:
+            if self.fallback_reason is not None:
+                raise ValueError("accepted proposal cannot have a fallback reason")
+            if proposed is None or proposed != executed:
+                raise ValueError("accepted proposal must execute the proposed action")
+            return
+
+        if self.fallback_reason not in FALLBACK_REASONS:
+            raise ValueError("rejected proposal requires a known fallback reason")
+        if self.fallback_reason == "prohibited_action":
+            if proposed is None or proposed == executed:
+                raise ValueError("prohibited proposal must record the rejected action")
+        elif proposed is not None:
+            raise ValueError("runtime/output fallback cannot claim a proposed action")
 
 
 def _bounded_observation(value: object) -> np.ndarray:
