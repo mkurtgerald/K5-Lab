@@ -39,6 +39,11 @@ def _optional_token(value: str | None, *, field: str) -> None:
             raise ValueError(f"invalid {field}") from exc
 
 
+def _sha256_digest(value: str, *, field: str) -> None:
+    if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"invalid {field}")
+
+
 @dataclass(frozen=True)
 class AuditEvent:
     event_id: str
@@ -57,10 +62,11 @@ class AuditEvent:
     proposal_id: str | None = None
     grant_ref: str | None = None
     approval_ref: str | None = None
-    version: str = "1"
+    evidence_digests: tuple[str, ...] = ()
+    version: str = "2"
 
     def __post_init__(self) -> None:
-        if self.version != "1":
+        if self.version != "2":
             raise ValueError("unsupported audit version")
         for value in (
             self.event_id,
@@ -89,6 +95,10 @@ class AuditEvent:
             raise ValueError("duplicate audit evidence ref")
         for value in self.evidence_refs:
             token(value)
+        if not isinstance(self.evidence_digests, tuple) or len(self.evidence_digests) != len(self.evidence_refs):
+            raise ValueError("audit evidence digests must bind every evidence ref")
+        for value in self.evidence_digests:
+            _sha256_digest(value, field="audit evidence")
 
 
 @dataclass(frozen=True)
