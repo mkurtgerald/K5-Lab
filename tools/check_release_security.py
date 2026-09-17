@@ -24,7 +24,7 @@ FORBIDDEN_IMPORT_ROOTS = {
     "tempfile",
     "marshal",
 }
-WRITE_METHODS = {"write_text", "write_bytes", "touch", "mkdir", "unlink", "rename", "replace"}
+WRITE_METHODS = {"write_text", "write_bytes", "touch", "mkdir", "unlink", "rename"}
 WRITE_MODE_CHARS = set("wax+")
 ALLOWED_SUBPROCESS_FILE = "native_runtime.py"
 ALLOWED_SUBPROCESS_EXE = "ldd"

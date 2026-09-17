@@ -113,6 +113,13 @@ class ReleaseSecurityTests(unittest.TestCase):
         errors = scan_source(Path("src/mosaic_lab/x.py"), "__import__('socket')\n")
         self.assertTrue(any("dynamic runtime import" in error for error in errors))
 
+    def test_harmless_string_replace_passes(self):
+        errors = scan_source(
+            Path("src/mosaic_lab/x.py"),
+            "value = 'a\\b'.replace('\\\\', '/')\n",
+        )
+        self.assertEqual(errors, [])
+
     def test_subprocess_outside_native_fails(self):
         errors = scan_source(
             Path("src/mosaic_lab/x.py"),
