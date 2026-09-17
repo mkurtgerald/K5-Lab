@@ -36,6 +36,8 @@ jobs:
         run: python tools/check_native_release.py
       - name: Adapter contract consistency
         run: python tools/check_adapter_contract.py
+      - name: Release security/privacy boundary
+        run: python tools/check_release_security.py
       - name: Package metadata boundary
         run: python tools/check_package_metadata.py
       - name: Install explicit core versions
