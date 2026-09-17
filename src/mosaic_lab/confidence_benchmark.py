@@ -118,7 +118,7 @@ def evaluate_confidence_quality(
     for scenario in ("stationary", "shifted"):
         for seed in seeds:
             rows = _observations(scenario=scenario, size=size, seed=seed)
-            minimum_samples = min(150, len(rows))
+            minimum_samples = max(100, ceil(len(rows) * 0.5))
 
             tracemalloc.start()
             report_started = perf_counter()
@@ -141,6 +141,7 @@ def evaluate_confidence_quality(
                 "scenario": scenario,
                 "seed": seed,
                 "evaluation_samples": len(rows),
+                "minimum_answered_samples": minimum_samples,
                 "report": report,
                 "receipt_digest": sha256(
                     "\n".join(receipts).encode("utf-8")
@@ -154,6 +155,7 @@ def evaluate_confidence_quality(
             "scenario": row["scenario"],
             "seed": row["seed"],
             "evaluation_samples": row["evaluation_samples"],
+            "minimum_answered_samples": row["minimum_answered_samples"],
             "report": row["report"],
             "receipt_digest": row["receipt_digest"],
         }
