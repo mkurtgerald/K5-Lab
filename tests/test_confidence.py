@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import unittest
 
@@ -101,6 +102,19 @@ class ConfidenceTests(unittest.TestCase):
         a = evidence_receipt(obs(1, score=0.9, label=True, abstained=False))
         b = evidence_receipt(obs(1, score=0.9, label=True, abstained=True))
         self.assertNotEqual(a.receipt_id, b.receipt_id)
+
+    def test_tampered_report_and_receipt_fail_closed(self):
+        rows = tuple(
+            obs(i, score=0.9 if i % 2 else 0.1, label=bool(i % 2))
+            for i in range(240)
+        )
+        report = calibration_report(rows, bins=8, minimum_samples=200)
+        with self.assertRaises(ValueError):
+            replace(report, coverage=1.1)
+
+        receipt = evidence_receipt(obs(1, provenance=("e1",)))
+        with self.assertRaises(ValueError):
+            replace(receipt, receipt_id="ev_" + ("0" * 32))
 
 
 if __name__ == "__main__":

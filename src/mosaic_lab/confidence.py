@@ -24,6 +24,46 @@ def _bool(value: object, *, name: str) -> bool:
     return value
 
 
+def _optional_unit(value: float | None, *, name: str) -> float | None:
+    if value is None:
+        return None
+    try:
+        return unit_score(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} out of range") from exc
+
+
+def _evidence_id(
+    *,
+    partition: str,
+    sample_id: str,
+    model_id: str,
+    score: float,
+    predicted: bool,
+    abstained: bool,
+    drift_detected: bool,
+    rule_id: str,
+    provenance: tuple[str, ...],
+) -> str:
+    payload = {
+        "version": "1",
+        "partition": partition,
+        "sample_id": sample_id,
+        "model_id": model_id,
+        "score": format(score, ".17g"),
+        "score_semantics": "uncalibrated_score",
+        "predicted": predicted,
+        "abstained": abstained,
+        "drift_detected": drift_detected,
+        "rule_id": rule_id,
+        "provenance": provenance,
+    }
+    digest = sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:32]
+    return "ev_" + digest
+
+
 @dataclass(frozen=True)
 class ConfidenceObservation:
     partition: str
@@ -83,6 +123,39 @@ class CalibrationReport:
     def __post_init__(self) -> None:
         token(self.partition)
         token(self.model_id)
+        if (
+            isinstance(self.sample_count, bool)
+            or not isinstance(self.sample_count, int)
+            or not 1 <= self.sample_count <= MAX_OBSERVATIONS
+        ):
+            raise ValueError("sample_count out of range")
+        if (
+            isinstance(self.answered_count, bool)
+            or not isinstance(self.answered_count, int)
+            or not 0 <= self.answered_count <= self.sample_count
+        ):
+            raise ValueError("answered_count out of range")
+        if (
+            isinstance(self.bins, bool)
+            or not isinstance(self.bins, int)
+            or not 2 <= self.bins <= MAX_BINS
+        ):
+            raise ValueError("bins out of range")
+        coverage = unit_score(self.coverage)
+        abstention = unit_score(self.abstention_rate)
+        if abs((coverage + abstention) - 1.0) > 1e-12:
+            raise ValueError("coverage and abstention are inconsistent")
+        _optional_unit(self.balanced_accuracy, name="balanced_accuracy")
+        _optional_unit(self.false_positive_rate, name="false_positive_rate")
+        _optional_unit(self.false_negative_rate, name="false_negative_rate")
+        unit_score(self.raw_score_brier)
+        _optional_unit(self.answered_brier, name="answered_brier")
+        unit_score(self.raw_score_ece)
+        _bool(self.evidence_sufficient, name="evidence_sufficient")
+        if self.answered_count == 0 and self.answered_brier is not None:
+            raise ValueError("answered_brier requires answered observations")
+        if self.answered_count > 0 and self.answered_brier is None:
+            raise ValueError("answered observations require answered_brier")
         if self.version != "1":
             raise ValueError("unsupported calibration report version")
         if self.score_semantics != "uncalibrated_score":
@@ -119,7 +192,7 @@ class EvidenceReceipt:
             self.rule_id,
         ):
             token(value)
-        unit_score(self.score)
+        score = unit_score(self.score)
         if self.score_semantics != "uncalibrated_score":
             raise ValueError("unsupported score semantics")
         for name, value in (
@@ -140,6 +213,19 @@ class EvidenceReceipt:
             raise ValueError("unsupported evidence receipt version")
         if self.authorized is not False or self.external_actions != 0:
             raise ValueError("evidence receipts have no execution authority")
+        expected = _evidence_id(
+            partition=self.partition,
+            sample_id=self.sample_id,
+            model_id=self.model_id,
+            score=score,
+            predicted=self.predicted,
+            abstained=self.abstained,
+            drift_detected=self.drift_detected,
+            rule_id=self.rule_id,
+            provenance=self.provenance,
+        )
+        if self.receipt_id != expected:
+            raise ValueError("evidence receipt integrity mismatch")
 
 
 def _rate(numerator: int, denominator: int) -> float | None:
@@ -251,24 +337,19 @@ def evidence_receipt(
         raise TypeError("ConfidenceObservation required")
     token(rule_id)
     provenance = tuple(sorted(observation.provenance))
-    payload = {
-        "version": "1",
-        "partition": observation.partition,
-        "sample_id": observation.sample_id,
-        "model_id": observation.model_id,
-        "score": format(observation.score, ".17g"),
-        "score_semantics": "uncalibrated_score",
-        "predicted": observation.predicted,
-        "abstained": observation.abstained,
-        "drift_detected": observation.drift_detected,
-        "rule_id": rule_id,
-        "provenance": provenance,
-    }
-    digest = sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()[:32]
+    receipt_id = _evidence_id(
+        partition=observation.partition,
+        sample_id=observation.sample_id,
+        model_id=observation.model_id,
+        score=observation.score,
+        predicted=observation.predicted,
+        abstained=observation.abstained,
+        drift_detected=observation.drift_detected,
+        rule_id=rule_id,
+        provenance=provenance,
+    )
     return EvidenceReceipt(
-        receipt_id="ev_" + digest,
+        receipt_id=receipt_id,
         partition=observation.partition,
         sample_id=observation.sample_id,
         model_id=observation.model_id,
