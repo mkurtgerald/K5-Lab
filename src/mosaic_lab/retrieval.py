@@ -381,7 +381,11 @@ class RetrievalSession:
         *,
         current_policy_revision: str,
         now: datetime,
+        max_age_seconds: float = 60.0,
     ) -> CheckpointCheck:
+        now = utc(now)
+        if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, (int, float)) or not isfinite(float(max_age_seconds)) or max_age_seconds <= 0:
+            raise ValueError("max_age_seconds outside bounded limit")
         if not isinstance(checkpoint, RetrievalCheckpoint):
             return CheckpointCheck("denied", "invalid_checkpoint", self.session_id)
         if (
@@ -395,6 +399,11 @@ class RetrievalSession:
             return CheckpointCheck("denied", reason, self.session_id)
         if checkpoint.policy_revision != current_policy_revision:
             return CheckpointCheck("denied", "checkpoint_policy_changed", self.session_id)
+        checkpoint_age = (now - utc(checkpoint.created_at)).total_seconds()
+        if checkpoint_age < 0:
+            return CheckpointCheck("denied", "checkpoint_future", self.session_id)
+        if checkpoint_age > float(max_age_seconds):
+            return CheckpointCheck("denied", "checkpoint_stale", self.session_id)
         with self._lock:
             records = tuple(self._cache.get(record_id) for record_id in checkpoint.evidence_refs)
         if any(record is None for record in records):
@@ -404,4 +413,9 @@ class RetrievalSession:
                 return CheckpointCheck("denied", "record_out_of_scope", self.session_id)
             if record is None or record.partition != self.partition or record.record_id != record_id:
                 return CheckpointCheck("denied", "checkpoint_binding_invalid", self.session_id)
+            evidence_age = (now - utc(record.observed_at)).total_seconds()
+            if evidence_age < 0:
+                return CheckpointCheck("denied", "checkpoint_evidence_future", self.session_id)
+            if evidence_age > float(max_age_seconds):
+                return CheckpointCheck("denied", "checkpoint_evidence_stale", self.session_id)
         return CheckpointCheck("accepted_for_read", "checkpoint_valid", self.session_id, checkpoint.evidence_refs)
