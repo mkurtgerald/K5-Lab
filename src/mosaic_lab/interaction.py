@@ -322,6 +322,10 @@ def evaluate_proposal(
         item = evidence.get(record_id)
         if item is None:
             return decision("abstain", "missing_evidence")
+        if not isinstance(item, EvidenceRef):
+            return decision("denied", "invalid_evidence_type")
+        if item.record_id != record_id:
+            return decision("denied", "reference_mismatch")
         if item.partition != authority.partition:
             return decision("denied", "cross_partition_evidence")
         age = (now - utc(item.observed_at)).total_seconds()
