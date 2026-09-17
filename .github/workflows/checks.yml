@@ -48,3 +48,5 @@ jobs:
         run: python tools/run_native_inventory.py
       - name: Bounded memory and correlation smoke
         run: python tools/run_memory_benchmark.py --samples 512
+      - name: Confidence and evidence multi-seed smoke
+        run: python tools/run_confidence_benchmark.py --samples 600
