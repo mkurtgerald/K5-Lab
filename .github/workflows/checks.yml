@@ -26,10 +26,28 @@ jobs:
           python-version: "3.13"
       - name: Publication boundary
         run: python tools/check_public.py --index
+      - name: Release provenance consistency
+        run: python tools/check_release_provenance.py
+      - name: Release SBOM consistency
+        run: python tools/check_release_sbom.py
+      - name: Release license and notices boundary
+        run: python tools/check_release_licenses.py
+      - name: Native release boundary
+        run: python tools/check_native_release.py
+      - name: Adapter contract consistency
+        run: python tools/check_adapter_contract.py
+      - name: Release security/privacy boundary
+        run: python tools/check_release_security.py
+      - name: Package metadata boundary
+        run: python tools/check_package_metadata.py
       - name: Install explicit core versions
         run: python -m pip install --disable-pip-version-check -r requirements-core.txt
       - name: Tests
         run: python tools/run_tests.py
+      - name: Release fail-safe qualification
+        run: python tools/run_release_failsafe.py
+      - name: Package artifact lifecycle
+        run: python tools/run_package_lifecycle.py
       - name: Synthetic baseline smoke
         run: python tools/run_benchmark.py --samples 600
       - name: Constrained allocation smoke

@@ -1,5 +1,5 @@
 {
-  "reviewed_on": "2026-09-16",
+  "reviewed_on": "2026-09-17",
   "release_approved": false,
   "components": [
     {
@@ -24,13 +24,13 @@
     },
     {
       "name": "torch",
-      "status": "used",
-      "version": "2.10.0+cpu",
+      "status": "s3-isolated-candidate",
+      "version": "2.14.0+cpu",
       "upstream": "https://github.com/pytorch/pytorch",
-      "installed_metadata_sha256": "d6031f9f56089c835e78a75875c1be87a34bcfdf5a79ef9f069084ed9244a5d4",
-      "artifact_sha256": null,
+      "artifact_sha256": "160e1bc46aeded3111d2801f8ae10dc9a1b946843a7e126b4dbf5e19c5706e95",
       "distribution_approved": false,
-      "review_scope": "installed version/metadata and preliminary project-level license only; dependency and binary review pending"
+      "review_scope": "Exact CPython 3.13 Linux CPU wheel digest and native inventory captured in S3 runtime review; bundled notices, vulnerability and target-platform review remain pending",
+      "project_license": "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT"
     },
     {
       "name": "numpy",
@@ -94,57 +94,163 @@
     },
     {
       "name": "OR-Tools",
-      "status": "candidate",
+      "status": "s1-candidate",
       "upstream": "https://github.com/google/or-tools",
       "project_license": "Apache-2.0",
-      "version": null,
-      "artifact_sha256": null,
-      "distribution_approved": false
+      "version": "9.15.6755",
+      "artifact_sha256": "ebd5aea00374e3aad7a78de59058aca5e871a26a3c385cd0860ef1d685d03c9a",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 CPython 3.13 Linux wheel digest and project license captured; native bundle, notices, vulnerability and target-platform review remain pending"
+    },
+    {
+      "name": "absl-py",
+      "status": "s1-transitive",
+      "version": "2.5.0",
+      "upstream": "https://github.com/abseil/abseil-py",
+      "project_license": "Apache-2.0",
+      "artifact_sha256": "0f17b89f2a4eaaedc4f28c622998aa690564b3012a396a4ffad0821007fe03ba",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 artifact digest and published project license captured; bundle/notices/vulnerability/platform review pending"
+    },
+    {
+      "name": "immutabledict",
+      "status": "s1-transitive",
+      "version": "4.3.1",
+      "upstream": "https://github.com/corenting/immutabledict",
+      "project_license": "MIT",
+      "artifact_sha256": "c9facdc0ff30fdb8e35bd16532026cac472a549e182c94fa201b51b25e4bf7bf",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 artifact digest and published project license captured; bundle/notices/vulnerability/platform review pending"
+    },
+    {
+      "name": "pandas",
+      "status": "s1-transitive",
+      "version": "2.3.3",
+      "upstream": "https://github.com/pandas-dev/pandas",
+      "project_license": "BSD-3-Clause",
+      "artifact_sha256": "318d77e0e42a628c04dc56bcef4b40de67918f7041c2b061af1da41dcff670ac",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 CPython 3.13 Linux wheel digest and published project license captured; native bundle/notices/vulnerability/platform review pending"
+    },
+    {
+      "name": "protobuf",
+      "status": "s1-transitive",
+      "version": "6.33.6",
+      "upstream": "https://github.com/protocolbuffers/protobuf",
+      "project_license": "BSD-3-Clause",
+      "artifact_sha256": "e9db7e292e0ab79dd108d7f1a94fe31601ce1ee3f7b79e0692043423020b0593",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 Linux wheel digest and published project license captured; native bundle/notices/vulnerability/platform review pending"
+    },
+    {
+      "name": "typing-extensions",
+      "status": "s1-transitive",
+      "version": "4.16.0",
+      "upstream": "https://github.com/python/typing_extensions",
+      "project_license": "PSF-2.0",
+      "artifact_sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 artifact digest and published project license captured; bundle/notices/vulnerability/platform review pending"
+    },
+    {
+      "name": "python-dateutil",
+      "status": "s1-transitive",
+      "version": "2.9.0.post0",
+      "upstream": "https://github.com/dateutil/dateutil",
+      "project_license": "BSD-3-Clause OR Apache-2.0",
+      "artifact_sha256": "a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 artifact digest and published project license captured; bundle/notices/vulnerability/platform review pending"
+    },
+    {
+      "name": "pytz",
+      "status": "s1-transitive",
+      "version": "2026.3.post1",
+      "upstream": "https://github.com/stub42/pytz",
+      "project_license": "MIT",
+      "artifact_sha256": "dd95840dd199baea12d9cc096a1d452caa6596a1c1e4b5f3dbd1541855d5e815",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 artifact digest and published project license captured; bundle/notices/vulnerability/platform review pending"
+    },
+    {
+      "name": "tzdata",
+      "status": "s1-transitive",
+      "version": "2025.3",
+      "upstream": "https://github.com/python/tzdata",
+      "project_license": "Apache-2.0",
+      "artifact_sha256": "06a47e5700f3081aab02b2e513160914ff0694bce9947d6b76ebd6bf57cfc5d1",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 artifact digest and published project license captured; bundle/notices/vulnerability/platform review pending"
+    },
+    {
+      "name": "six",
+      "status": "s1-transitive",
+      "version": "1.17.0",
+      "upstream": "https://github.com/benjaminp/six",
+      "project_license": "MIT",
+      "artifact_sha256": "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274",
+      "distribution_approved": false,
+      "review_scope": "Exact S1 artifact digest and published project license captured; bundle/notices/vulnerability/platform review pending"
     },
     {
       "name": "River",
-      "status": "candidate",
+      "status": "s2-candidate",
       "upstream": "https://github.com/online-ml/river",
       "project_license": "BSD-3-Clause",
-      "version": null,
-      "artifact_sha256": null,
-      "distribution_approved": false
+      "version": "0.26.1",
+      "artifact_sha256": "7d8e6aa749f06e6bd71835ef722c14627bbb049f6929f5bc0d8a65dcd813ad4b",
+      "distribution_approved": false,
+      "review_scope": "Exact Linux CPython 3.13 wheel digest captured; notices, vulnerability and target-platform review remain pending"
+    },
+    {
+      "name": "Narwhals",
+      "status": "s2-transitive",
+      "upstream": "https://github.com/narwhals-dev/narwhals",
+      "project_license": "MIT",
+      "version": "2.26.0",
+      "artifact_sha256": "29326d74f107c347fd1009bd58e38d9f7c7c5b51e6de97bc93dbc325d9038b54",
+      "distribution_approved": false,
+      "review_scope": "Exact S2 wheel digest and published project license captured; bundle/notices/vulnerability/platform review pending"
     },
     {
       "name": "Gymnasium",
-      "status": "candidate",
+      "status": "s3-candidate",
       "upstream": "https://github.com/Farama-Foundation/Gymnasium",
       "project_license": "MIT",
-      "version": null,
+      "version": "1.3.0",
       "artifact_sha256": null,
-      "distribution_approved": false
+      "distribution_approved": false,
+      "review_scope": "Exact tested version recorded; artifact/notices review remains incomplete"
     },
     {
       "name": "Stable-Baselines3",
-      "status": "candidate",
+      "status": "s3-isolated-candidate",
       "upstream": "https://github.com/DLR-RM/stable-baselines3",
       "project_license": "MIT",
-      "version": null,
-      "artifact_sha256": null,
-      "distribution_approved": false
+      "version": "2.9.0",
+      "artifact_sha256": "95f39a473dce081d1abe31acaf7cee446dcf223dcd74093d6ea460bc37e2e748",
+      "distribution_approved": false,
+      "review_scope": "Exact wheel digest captured in S3 runtime review; optional learned-policy runtime only and not distribution-approved"
     },
     {
       "name": "Ray/RLlib",
-      "status": "candidate",
+      "status": "non-shipping-candidate",
       "upstream": "https://github.com/ray-project/ray",
       "project_license": "Apache-2.0",
       "version": null,
       "artifact_sha256": null,
-      "distribution_approved": false
+      "distribution_approved": false,
+      "review_scope": "Screened alternative only; not selected or installed"
     },
     {
       "name": "Open Policy Agent",
-      "status": "candidate",
+      "status": "non-shipping-candidate",
       "upstream": "https://github.com/open-policy-agent/opa",
       "project_license": "Apache-2.0",
       "version": null,
       "artifact_sha256": null,
-      "distribution_approved": false
+      "distribution_approved": false,
+      "review_scope": "Screened alternative only; not selected or installed"
     },
     {
       "name": "owlrl",
