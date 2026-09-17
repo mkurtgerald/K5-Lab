@@ -1,6 +1,9 @@
 import unittest
 
-from mosaic_lab.stream_robustness import evaluate_stream_robustness
+from mosaic_lab.stream_robustness import (
+    evaluate_stream_robustness,
+    evaluate_stream_robustness_multiseed,
+)
 from mosaic_lab.streaming import RiverBinaryAdapter, StreamSample
 from datetime import datetime, timezone
 
@@ -13,9 +16,24 @@ class StreamRobustnessTests(unittest.TestCase):
         self.assertFalse(result["performance_gate_established"])
         self.assertTrue(result["poisoning_stops_before_evaluation"])
         self.assertGreater(result["poisoned_training_samples"], 0)
+        self.assertGreater(result["cold_start_updates"], 0)
         self.assertGreater(result["rare_clean"]["count"], 0)
-        for group in ("clean", "poisoned_history"):
+        for group in ("clean", "poisoned_history", "cold_start"):
             for key, value in result[group].items():
+                self.assertGreaterEqual(value, 0.0, key)
+                self.assertLessEqual(value, 1.0, key)
+
+    def test_multiseed_robustness_candidate_reports_honest_gate_state(self):
+        result = evaluate_stream_robustness_multiseed(size=600, seeds=(7, 31, 59))
+        self.assertEqual(result["external_actions"], 0)
+        self.assertFalse(result["production_qualified"])
+        self.assertFalse(result["performance_gate_established"])
+        self.assertIsInstance(result["candidate_passed"], bool)
+        self.assertEqual(result["seeds"], (7, 31, 59))
+        self.assertEqual(len(result["runs"]), 3)
+        self.assertGreater(result["summary"]["total_rare_samples"], 0)
+        for key, value in result["summary"].items():
+            if key != "total_rare_samples":
                 self.assertGreaterEqual(value, 0.0, key)
                 self.assertLessEqual(value, 1.0, key)
 
@@ -28,6 +46,10 @@ class StreamRobustnessTests(unittest.TestCase):
             with self.subTest(threshold=threshold):
                 with self.assertRaises(ValueError):
                     evaluate_stream_robustness(size=400, rare_abs_feature=threshold)
+        for seeds in ((7, 19), (7, 7, 19), (True, 7, 19), (7, -1, 19), [7, 19, 31]):
+            with self.subTest(seeds=seeds):
+                with self.assertRaises(ValueError):
+                    evaluate_stream_robustness_multiseed(size=400, seeds=seeds)
 
     def test_missing_and_nonfinite_features_are_rejected_without_update(self):
         adapter = RiverBinaryAdapter("p1", feature_count=2)
