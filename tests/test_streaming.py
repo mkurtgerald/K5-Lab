@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import math
 import unittest
@@ -6,6 +7,7 @@ from mosaic_lab.streaming import (
     LEARNING_RATE,
     MODEL_ID,
     MAX_SOURCES,
+    MAX_UPDATES,
     RiverBinaryAdapter,
     StreamOutcome,
     StreamSample,
@@ -38,8 +40,23 @@ class StreamContractTests(unittest.TestCase):
             sample(label=1)
 
     def test_outcome_cannot_claim_authority(self):
-        with self.assertRaises(ValueError):
-            StreamOutcome("p1", "s1", 0.5, True, False, False, 1, authorized=True)
+        outcome = StreamOutcome("p1", "s1", 0.5, True, False, False, 1)
+        self.assertFalse(outcome.authorized)
+        self.assertEqual(outcome.external_actions, 0)
+        for changes in (
+            {"authorized": True},
+            {"external_actions": 1},
+            {"version": "2"},
+            {"kind": "other"},
+            {"model_id": "other"},
+            {"update_index": -1},
+            {"update_index": True},
+            {"update_index": MAX_UPDATES + 1},
+            {"partition": "bad id"},
+            {"sample_id": "bad id"},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                replace(outcome, **changes)
 
 
 class RiverAdapterTests(unittest.TestCase):
@@ -61,6 +78,7 @@ class RiverAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.updates, 0)
         self.assertEqual(adapter.state_receipt(), receipt_before)
         self.assertFalse(predicted.authorized)
+        self.assertEqual(predicted.external_actions, 0)
         with self.assertRaises(ValueError):
             adapter.process(unlabeled)
         self.assertEqual(adapter.updates, 0)
