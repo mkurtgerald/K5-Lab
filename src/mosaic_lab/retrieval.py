@@ -33,6 +33,12 @@ def _bounded_text(value: object, *, field: str) -> str:
     return value
 
 
+def _sha256_digest(value: object, *, field: str) -> str:
+    if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"{field} requires lowercase sha256 digest")
+    return value
+
+
 @dataclass(frozen=True)
 class EvidenceRecord:
     """Untrusted evidence payload with opaque identity and bounded content."""
@@ -146,10 +152,11 @@ class RetrievalCheckpoint:
     policy_revision: str
     evidence_refs: tuple[str, ...]
     created_at: datetime
-    version: str = "1"
+    version: str = "2"
+    evidence_digests: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.version != "1":
+        if self.version != "2":
             raise ValueError("unsupported checkpoint version")
         for value in (self.session_id, self.partition, self.principal_ref, self.policy_revision):
             token(value)
@@ -160,6 +167,10 @@ class RetrievalCheckpoint:
             raise ValueError("duplicate checkpoint evidence")
         for value in self.evidence_refs:
             token(value)
+        if not isinstance(self.evidence_digests, tuple) or len(self.evidence_digests) != len(self.evidence_refs):
+            raise ValueError("checkpoint evidence digests must bind every evidence ref")
+        for value in self.evidence_digests:
+            _sha256_digest(value, field="checkpoint evidence")
 
 
 @dataclass(frozen=True)
@@ -363,8 +374,10 @@ class RetrievalSession:
         for record_id in evidence_refs:
             token(record_id)
         with self._lock:
-            if any(record_id not in self._cache for record_id in evidence_refs):
-                raise ValueError("checkpoint cannot reference uncached evidence")
+            records = tuple(self._cache.get(record_id) for record_id in evidence_refs)
+        if any(record is None for record in records):
+            raise ValueError("checkpoint cannot reference uncached evidence")
+        digests = tuple(record.content_digest for record in records if record is not None)
         return RetrievalCheckpoint(
             self.session_id,
             self.partition,
@@ -372,6 +385,7 @@ class RetrievalSession:
             self.policy_revision,
             evidence_refs,
             utc(now),
+            evidence_digests=digests,
         )
 
     def validate_checkpoint(
@@ -408,11 +422,17 @@ class RetrievalSession:
             records = tuple(self._cache.get(record_id) for record_id in checkpoint.evidence_refs)
         if any(record is None for record in records):
             return CheckpointCheck("denied", "checkpoint_cache_missing", self.session_id)
-        for record_id, record in zip(checkpoint.evidence_refs, records, strict=True):
+        for record_id, expected_digest, record in zip(checkpoint.evidence_refs, checkpoint.evidence_digests, records, strict=True):
             if record_id not in scope.allowed_record_ids:
                 return CheckpointCheck("denied", "record_out_of_scope", self.session_id)
             if record is None or record.partition != self.partition or record.record_id != record_id:
                 return CheckpointCheck("denied", "checkpoint_binding_invalid", self.session_id)
+            try:
+                current_digest = record.content_digest
+            except Exception:
+                return CheckpointCheck("denied", "checkpoint_binding_invalid", self.session_id)
+            if current_digest != expected_digest:
+                return CheckpointCheck("denied", "checkpoint_evidence_changed", self.session_id)
             evidence_age = (now - utc(record.observed_at)).total_seconds()
             if evidence_age < 0:
                 return CheckpointCheck("denied", "checkpoint_evidence_future", self.session_id)
