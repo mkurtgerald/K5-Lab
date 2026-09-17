@@ -18,6 +18,8 @@ _MAX_STEPS = 64
 _MAX_DURATION_SECONDS = 300.0
 _MAX_RATE_PER_MINUTE = 120
 _MAX_TRACKED_DELIVERIES = 4096
+_MAX_AUDIT_APPROVAL_REFS = 4
+_MAX_AUDIT_EVIDENCE_REFS = 128
 _ALLOWED_OUTCOMES = frozenset({"verified_complete", "failed", "outcome_unknown"})
 
 
@@ -25,6 +27,47 @@ def _digest(value: str, *, field: str) -> str:
     if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
         raise ValueError(f"{field} must be a lowercase sha256 digest")
     return value
+
+
+@dataclass(frozen=True)
+class AuditAdmissionBinding:
+    """Trusted immutable identities that an effect audit event must preserve."""
+
+    proposal_id: str
+    proposal_digest: str
+    approval_refs: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
+    evidence_digests: tuple[str, ...] = ()
+    version: str = "1"
+
+    def __post_init__(self) -> None:
+        if self.version != "1":
+            raise ValueError("unsupported audit binding version")
+        token(self.proposal_id)
+        _digest(self.proposal_digest, field="proposal_digest")
+        if (
+            not isinstance(self.approval_refs, tuple)
+            or len(self.approval_refs) > _MAX_AUDIT_APPROVAL_REFS
+            or len(set(self.approval_refs)) != len(self.approval_refs)
+        ):
+            raise ValueError("invalid audit approval refs")
+        for value in self.approval_refs:
+            token(value)
+        if (
+            not isinstance(self.evidence_refs, tuple)
+            or len(self.evidence_refs) > _MAX_AUDIT_EVIDENCE_REFS
+            or len(set(self.evidence_refs)) != len(self.evidence_refs)
+        ):
+            raise ValueError("invalid audit evidence refs")
+        for value in self.evidence_refs:
+            token(value)
+        if (
+            not isinstance(self.evidence_digests, tuple)
+            or len(self.evidence_digests) != len(self.evidence_refs)
+        ):
+            raise ValueError("audit evidence digests must bind every evidence ref")
+        for value in self.evidence_digests:
+            _digest(value, field="audit evidence")
 
 
 @dataclass(frozen=True)
@@ -129,15 +172,34 @@ class DelegatedSimulation:
 
 
 class AuditedDelegatedSimulation(DelegatedSimulation):
-    """Synthetic delegation that requires audit admission before any mocked effect.
+    """Synthetic delegation requiring exact upstream identity and audit admission.
 
     Audit admission is not claimed to be durable/tamper-evident here; a private
     production adapter must provide that property. Absence or failure fails closed.
     """
-    def __init__(self,grant:DelegationGrant,*,session_id:str,started_at:datetime,audit_sink:AuditBuffer|None,max_tracked_deliveries:int=256)->None:
+    def __init__(self,grant:DelegationGrant,*,session_id:str,started_at:datetime,audit_sink:AuditBuffer|None,audit_binding:AuditAdmissionBinding|None=None,max_tracked_deliveries:int=256)->None:
         super().__init__(grant,session_id=session_id,started_at=started_at,max_tracked_deliveries=max_tracked_deliveries)
+        if audit_binding is not None:
+            if not isinstance(audit_binding, AuditAdmissionBinding):
+                raise ValueError("trusted audit binding required")
+            if audit_binding.proposal_digest != grant.proposal_digest:
+                raise ValueError("audit proposal digest mismatch")
+            if len(audit_binding.approval_refs) > 1:
+                raise ValueError("audit schema cannot bind multiple approvals")
         self._audit_sink=audit_sink
+        self._audit_binding=audit_binding
         self._audit_gate=Lock()
+
+    def _audit_event_matches_upstream(self, audit_event: AuditEvent) -> bool:
+        if self._audit_binding is None:
+            return audit_event.approval_ref is None and not audit_event.evidence_refs and not audit_event.evidence_digests
+        expected_approval = self._audit_binding.approval_refs[0] if self._audit_binding.approval_refs else None
+        return (
+            audit_event.proposal_id == self._audit_binding.proposal_id
+            and audit_event.approval_ref == expected_approval
+            and audit_event.evidence_refs == self._audit_binding.evidence_refs
+            and audit_event.evidence_digests == self._audit_binding.evidence_digests
+        )
 
     def _preflight_before_audit(self, step: SimulationStep, kwargs: dict) -> SimulationReceipt | None:
         """Mirror effect-boundary denials before recording an attempted audit event."""
@@ -216,7 +278,7 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
                 audit_now=utc(kwargs["now"])
                 current_policy_revision=kwargs["current_policy_revision"]
                 current_profile=kwargs["current_profile"]
-                if audit_event.request_id!=step.step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=current_policy_revision or audit_event.profile!=current_profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!="attempted" or audit_event.outcome!="attempted" or utc(audit_event.recorded_at)!=audit_now:
+                if not self._audit_event_matches_upstream(audit_event) or audit_event.request_id!=step.step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=current_policy_revision or audit_event.profile!=current_profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!="attempted" or audit_event.outcome!="attempted" or utc(audit_event.recorded_at)!=audit_now:
                     return self._receipt(status="denied",reason="audit_binding_mismatch",step=step,step_index=idx)
                 try:self._audit_sink.append(audit_event)
                 except Exception:return self._receipt(status="denied",reason="audit_admission_failed",step=step,step_index=idx)
@@ -243,7 +305,7 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
                 except (TypeError,ValueError):
                     return replace(prior,status="reconciliation_required",reason="audit_binding_mismatch",mocked_effects=0,rollback_available=False)
                 expected_decision="returned" if authoritative_outcome=="verified_complete" else "failed"
-                if not isinstance(audit_event,AuditEvent) or audit_event.request_id!=step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=self._grant.policy_revision or audit_event.profile!=self._grant.profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!=expected_decision or audit_event.reason!="reconciled" or audit_event.outcome!=authoritative_outcome or utc(audit_event.recorded_at)!=audit_now:
+                if not isinstance(audit_event,AuditEvent) or not self._audit_event_matches_upstream(audit_event) or audit_event.request_id!=step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=self._grant.policy_revision or audit_event.profile!=self._grant.profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!=expected_decision or audit_event.reason!="reconciled" or audit_event.outcome!=authoritative_outcome or utc(audit_event.recorded_at)!=audit_now:
                     return replace(prior,status="reconciliation_required",reason="audit_binding_mismatch",mocked_effects=0,rollback_available=False)
                 try:
                     self._audit_sink.append(audit_event)

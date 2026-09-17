@@ -1,8 +1,9 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from mosaic_lab.approvals import ApprovalRecord, ApprovalUseLedger
 from mosaic_lab.audit import AuditBuffer, AuditEvent
-from mosaic_lab.delegation import AuditedDelegatedSimulation, DelegationGrant, SimulationStep
+from mosaic_lab.delegation import AuditAdmissionBinding, AuditedDelegatedSimulation, DelegationGrant, SimulationStep
 from mosaic_lab.interaction import EvidenceRef, TrustedAuthority, effect_digest, evaluate_proposal, parse_untrusted_proposal
 from mosaic_lab.retrieval import EvidenceRecord, ReadScope, RetrievalSession, SyntheticEvidenceStore
 from mosaic_lab.text_interaction import ActionPresentation, InteractionInput, InteractionSession, ProviderReply, run_interaction_turn
@@ -114,7 +115,7 @@ def upstream_digest():
     )
     assert text.status == "ok"
     assert not text.authorized and not text.execute and text.external_actions == 0
-    return digest, retrieval.content_digest
+    return proposal.proposal_id, digest, approval_result.consumed_approval_ids, retrieval.content_digest
 
 
 def grant(digest):
@@ -132,6 +133,16 @@ def grant(digest):
         max_steps=2,
         max_duration_seconds=30.0,
         max_actions_per_minute=2,
+    )
+
+
+def upstream_binding(proposal_id, digest, approval_refs, evidence_digest):
+    return AuditAdmissionBinding(
+        proposal_id=proposal_id,
+        proposal_digest=digest,
+        approval_refs=approval_refs,
+        evidence_refs=("rec1",),
+        evidence_digests=(evidence_digest,),
     )
 
 
@@ -157,7 +168,7 @@ def admission_event(evidence_digest):
     )
 
 
-def attempt(simulation, evidence_digest):
+def attempt(simulation, evidence_digest, *, audit_event=None):
     return simulation.attempt_step(
         SimulationStep("step1", "delivery1", "act1", "target1"),
         now=EFFECT_TIME,
@@ -169,15 +180,19 @@ def attempt(simulation, evidence_digest):
         grant_revoked=False,
         mocked_outcome="verified_complete",
         reversible=True,
-        audit_event=admission_event(evidence_digest),
+        audit_event=audit_event or admission_event(evidence_digest),
     )
 
 
 def test_end_to_end_effect_requires_successful_audit_admission():
-    digest, evidence_digest = upstream_digest()
+    proposal_id, digest, approval_refs, evidence_digest = upstream_digest()
     audit = AuditBuffer(max_entries=8)
     simulation = AuditedDelegatedSimulation(
-        grant(digest), session_id="session1", started_at=NOW, audit_sink=audit
+        grant(digest),
+        session_id="session1",
+        started_at=NOW,
+        audit_sink=audit,
+        audit_binding=upstream_binding(proposal_id, digest, approval_refs, evidence_digest),
     )
     receipt = attempt(simulation, evidence_digest)
     assert receipt.status == "verified_complete"
@@ -187,12 +202,74 @@ def test_end_to_end_effect_requires_successful_audit_admission():
 
 
 def test_end_to_end_audit_unavailable_has_zero_mocked_effects():
-    digest, evidence_digest = upstream_digest()
+    proposal_id, digest, approval_refs, evidence_digest = upstream_digest()
     simulation = AuditedDelegatedSimulation(
-        grant(digest), session_id="session1", started_at=NOW, audit_sink=None
+        grant(digest),
+        session_id="session1",
+        started_at=NOW,
+        audit_sink=None,
+        audit_binding=upstream_binding(proposal_id, digest, approval_refs, evidence_digest),
     )
     receipt = attempt(simulation, evidence_digest)
     assert receipt.status == "denied"
     assert receipt.reason == "audit_unavailable"
     assert receipt.mocked_effects == 0
     assert not receipt.authorized and not receipt.execute and receipt.external_actions == 0
+
+
+def test_upstream_identity_substitution_is_denied_before_audit_admission():
+    proposal_id, digest, approval_refs, evidence_digest = upstream_digest()
+    binding = upstream_binding(proposal_id, digest, approval_refs, evidence_digest)
+    original = admission_event(evidence_digest)
+    substitutions = (
+        replace(original, proposal_id="other"),
+        replace(original, approval_ref="other"),
+        replace(original, evidence_refs=("rec2",)),
+        replace(original, evidence_digests=("e" * 64,)),
+    )
+    for forged in substitutions:
+        audit = AuditBuffer(max_entries=8)
+        simulation = AuditedDelegatedSimulation(
+            grant(digest),
+            session_id="session1",
+            started_at=NOW,
+            audit_sink=audit,
+            audit_binding=binding,
+        )
+        receipt = attempt(simulation, evidence_digest, audit_event=forged)
+        assert (receipt.status, receipt.reason) == ("denied", "audit_binding_mismatch")
+        assert receipt.mocked_effects == 0
+        assert receipt.external_actions == 0
+        assert audit.snapshot() == ()
+
+
+def test_unbound_audit_cannot_claim_approval_or_evidence_provenance():
+    _, digest, _, evidence_digest = upstream_digest()
+    audit = AuditBuffer(max_entries=8)
+    simulation = AuditedDelegatedSimulation(
+        grant(digest), session_id="session1", started_at=NOW, audit_sink=audit
+    )
+    receipt = attempt(simulation, evidence_digest)
+    assert (receipt.status, receipt.reason) == ("denied", "audit_binding_mismatch")
+    assert receipt.mocked_effects == 0
+    assert audit.snapshot() == ()
+
+
+def test_binding_rejects_mismatched_digest_and_unrepresentable_multi_approval():
+    proposal_id, digest, _, evidence_digest = upstream_digest()
+    for binding in (
+        upstream_binding(proposal_id, "c" * 64, ("approval1",), evidence_digest),
+        upstream_binding(proposal_id, digest, ("approval1", "approval2"), evidence_digest),
+    ):
+        try:
+            AuditedDelegatedSimulation(
+                grant(digest),
+                session_id="session1",
+                started_at=NOW,
+                audit_sink=AuditBuffer(max_entries=8),
+                audit_binding=binding,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid upstream audit binding must fail closed")
