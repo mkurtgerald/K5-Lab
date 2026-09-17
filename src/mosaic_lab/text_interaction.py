@@ -363,6 +363,10 @@ def run_interaction_turn(
                 end = start
             if isfinite(end) and end >= start:
                 session._elapsed += end - start
+                if cancel.cancelled:
+                    return session._result(item, "cancelled", "cancelled_during_call")
+                if end >= request.deadline_monotonic or session._elapsed > session.limits.max_total_seconds:
+                    return session._result(item, "timeout", "provider_timeout")
             return session._result(item, "error", "provider_exception")
         try:
             end = float(clock())
