@@ -12,6 +12,7 @@ from hashlib import sha256
 import json
 
 from .contracts import token, unit_score, utc
+from .memory import BoundedEventMemory, MissingReference
 
 MAX_PROVENANCE = 32
 MAX_OBSERVATIONS = 50_000
@@ -304,10 +305,9 @@ def calibration_report(
         else sum((row.score - float(row.label)) ** 2 for row in answered) / answered_count
     )
     evidence_sufficient = (
-        sample_count >= minimum_samples
-        and any(row.label for row in rows)
-        and any(not row.label for row in rows)
-        and answered_count > 0
+        answered_count >= minimum_samples
+        and positives > 0
+        and negatives > 0
     )
 
     return CalibrationReport(
@@ -332,11 +332,19 @@ def evidence_receipt(
     observation: ConfidenceObservation,
     *,
     rule_id: str = "threshold_abstain_v1",
+    memory: BoundedEventMemory | None = None,
 ) -> EvidenceReceipt:
     if not isinstance(observation, ConfidenceObservation):
         raise TypeError("ConfidenceObservation required")
     token(rule_id)
     provenance = tuple(sorted(observation.provenance))
+    if provenance:
+        if memory is None:
+            raise MissingReference("resident provenance verification required")
+        if not isinstance(memory, BoundedEventMemory):
+            raise TypeError("BoundedEventMemory required")
+        for ref in provenance:
+            memory.get(observation.partition, ref)
     receipt_id = _evidence_id(
         partition=observation.partition,
         sample_id=observation.sample_id,

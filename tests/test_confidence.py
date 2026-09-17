@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import unittest
 
 from mosaic_lab.confidence import ConfidenceObservation, calibration_report, evidence_receipt
+from mosaic_lab.memory import BoundedEventMemory, Event, MissingReference
 
 
 BASE = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -34,12 +35,33 @@ def obs(
     )
 
 
+def memory_with_refs(*refs: str, partition: str = "p1") -> BoundedEventMemory:
+    memory = BoundedEventMemory(max_events_per_partition=64)
+    for index, ref in enumerate(refs):
+        stamp = BASE + timedelta(seconds=index)
+        memory.append(
+            Event(
+                partition=partition,
+                event_id=ref,
+                entity_key="entity_a",
+                event_type="type_a",
+                source_ref="source_a",
+                event_at=stamp,
+                observed_at=stamp,
+                confidence=0.8,
+            )
+        )
+    return memory
+
+
 class ConfidenceTests(unittest.TestCase):
     def test_observation_rejects_bad_score_and_duplicate_provenance(self):
         with self.assertRaises(ValueError):
             obs(1, score=float("nan"))
         with self.assertRaises(ValueError):
             obs(1, provenance=("e1", "e1"))
+        with self.assertRaises(ValueError):
+            replace(obs(1), version="2")
 
     def test_report_keeps_raw_score_semantics_uncalibrated(self):
         rows = tuple(
@@ -57,12 +79,25 @@ class ConfidenceTests(unittest.TestCase):
         self.assertFalse(report.authorized)
         self.assertEqual(report.external_actions, 0)
 
-    def test_insufficient_evidence_never_upgrades_probability_semantics(self):
-        rows = tuple(obs(i, score=0.8, label=True) for i in range(20))
-        report = calibration_report(rows, minimum_samples=20)
+    def test_insufficient_or_one_class_answered_evidence_stays_insufficient(self):
+        all_positive = tuple(obs(i, score=0.8, label=True) for i in range(20))
+        report = calibration_report(all_positive, minimum_samples=20)
         self.assertFalse(report.evidence_sufficient)
         self.assertIsNone(report.balanced_accuracy)
         self.assertIsNone(report.false_positive_rate)
+
+        mostly_abstained = tuple(
+            obs(
+                i,
+                score=0.9 if i % 2 else 0.1,
+                label=bool(i % 2),
+                abstained=i >= 10,
+            )
+            for i in range(240)
+        )
+        report = calibration_report(mostly_abstained, minimum_samples=200)
+        self.assertFalse(report.evidence_sufficient)
+        self.assertEqual(report.answered_count, 10)
         self.assertFalse(report.calibrated_probability_established)
 
     def test_all_abstained_window_is_valid_and_explicit(self):
@@ -88,15 +123,29 @@ class ConfidenceTests(unittest.TestCase):
             calibration_report((duplicate, duplicate))
 
     def test_evidence_receipt_is_canonical_deterministic_and_non_authorizing(self):
+        memory = memory_with_refs("e1", "e2")
         first = obs(1, provenance=("e2", "e1"))
         second = obs(1, provenance=("e1", "e2"))
-        a = evidence_receipt(first)
-        b = evidence_receipt(second)
+        a = evidence_receipt(first, memory=memory)
+        b = evidence_receipt(second, memory=memory)
         self.assertEqual(a.receipt_id, b.receipt_id)
         self.assertEqual(a.provenance, ("e1", "e2"))
         self.assertEqual(a.score_semantics, "uncalibrated_score")
         self.assertFalse(a.authorized)
         self.assertEqual(a.external_actions, 0)
+
+    def test_provenance_requires_resident_same_partition_events(self):
+        observation = obs(1, provenance=("e1",))
+        with self.assertRaises(MissingReference):
+            evidence_receipt(observation)
+
+        wrong_partition = memory_with_refs("e1", partition="p2")
+        with self.assertRaises(MissingReference):
+            evidence_receipt(observation, memory=wrong_partition)
+
+        missing = BoundedEventMemory()
+        with self.assertRaises(MissingReference):
+            evidence_receipt(observation, memory=missing)
 
     def test_evidence_receipt_changes_when_decision_state_changes(self):
         a = evidence_receipt(obs(1, score=0.9, label=True, abstained=False))
@@ -112,7 +161,7 @@ class ConfidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             replace(report, coverage=1.1)
 
-        receipt = evidence_receipt(obs(1, provenance=("e1",)))
+        receipt = evidence_receipt(obs(1))
         with self.assertRaises(ValueError):
             replace(receipt, receipt_id="ev_" + ("0" * 32))
 
