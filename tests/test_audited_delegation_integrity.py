@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from mosaic_lab.audit import AuditBuffer, AuditEvent
@@ -17,9 +18,9 @@ def grant():
     )
 
 
-def event(*, outcome="attempted", recorded_at=NOW):
+def event(*, event_id="e1", outcome="attempted", recorded_at=NOW):
     return AuditEvent(
-        event_id="e1", request_id="s1", partition="part1", principal_ref="p1",
+        event_id=event_id, request_id="s1", partition="part1", principal_ref="p1",
         profile="delegated_simulation", policy_revision="pol1", model_revision="m1",
         tool_revision="t1", evidence_refs=(), decision="attempted",
         reason="mocked_effect_admitted", outcome=outcome, recorded_at=recorded_at,
@@ -58,3 +59,32 @@ def test_audit_timestamp_must_bind_to_effect_boundary_time():
         assert receipt.mocked_effects == 0
         assert receipt.external_actions == 0
         assert sink.snapshot() == ()
+
+
+def test_concurrent_duplicate_delivery_records_one_audit_admission():
+    sink = AuditBuffer(max_entries=16)
+    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        receipts = list(pool.map(lambda i: attempt(sim, event(event_id=f"e{i}")), range(8)))
+
+    assert all(receipt == receipts[0] for receipt in receipts)
+    assert receipts[0].status == "verified_complete"
+    assert receipts[0].mocked_effects == 1
+    assert receipts[0].external_actions == 0
+    assert len(sink.snapshot()) == 1
+
+
+class TimeoutAuditBuffer(AuditBuffer):
+    def append(self, event):
+        raise TimeoutError("synthetic audit timeout")
+
+
+def test_unexpected_audit_sink_failure_fails_closed():
+    sink = TimeoutAuditBuffer(max_entries=4)
+    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+    receipt = attempt(sim, event())
+    assert receipt.status == "denied"
+    assert receipt.reason == "audit_admission_failed"
+    assert receipt.mocked_effects == 0
+    assert receipt.external_actions == 0
