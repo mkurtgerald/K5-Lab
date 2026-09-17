@@ -175,6 +175,27 @@ class ProviderReply:
             raise ValueError("non-ok reply cannot carry generated text")
 
 
+def _validated_provider_reply(value: object) -> ProviderReply | None:
+    """Revalidate provider-owned data at the session trust boundary."""
+    if type(value) is not ProviderReply:
+        return None
+    if any(type(field) is not str for field in (value.status, value.text, value.reason, value.version)):
+        return None
+    if type(value.input_tokens) is not int or type(value.output_tokens) is not int:
+        return None
+    try:
+        return ProviderReply(
+            value.status,
+            value.text,
+            value.reason,
+            value.input_tokens,
+            value.output_tokens,
+            value.version,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 class TextProvider(Protocol):
     def complete(self, request: ProviderRequest) -> ProviderReply: ...
 
@@ -350,13 +371,17 @@ def run_interaction_turn(
         if not isfinite(end) or end < start:
             return session._result(item, "error", "clock_regression")
         session._elapsed += end - start
-        if not isinstance(reply, ProviderReply):
+        reply = _validated_provider_reply(reply)
+        if reply is None:
             return session._result(item, "error", "invalid_provider_reply")
 
         local_output = len(reply.text.encode()) if reply.text else 0
-        effective_output = max(local_output, reply.output_tokens)
-        charged = max(local_input, reply.input_tokens) + effective_output
-        session._tokens += charged
+        accounting_cap = session.limits.max_total_tokens + 1
+        input_claim = min(reply.input_tokens, accounting_cap)
+        output_claim = min(reply.output_tokens, accounting_cap)
+        effective_output = max(local_output, output_claim)
+        charged = max(local_input, input_claim) + effective_output
+        session._tokens = min(accounting_cap, session._tokens + charged)
         if cancel.cancelled:
             return session._result(item, "cancelled", "cancelled_during_call")
         if end >= request.deadline_monotonic or session._elapsed > session.limits.max_total_seconds:
