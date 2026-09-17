@@ -129,18 +129,85 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
         super().__init__(grant,session_id=session_id,started_at=started_at,max_tracked_deliveries=max_tracked_deliveries)
         self._audit_sink=audit_sink
         self._audit_gate=Lock()
+
+    def _preflight_before_audit(self, step: SimulationStep, kwargs: dict) -> SimulationReceipt | None:
+        """Mirror effect-boundary denials before recording an attempted audit event."""
+        try:
+            now = utc(kwargs["now"])
+            current_policy_revision = kwargs["current_policy_revision"]
+            current_state_digest = kwargs["current_state_digest"]
+            current_profile = kwargs["current_profile"]
+            authority_available = kwargs["authority_available"]
+            cancelled = kwargs["cancelled"]
+            grant_revoked = kwargs["grant_revoked"]
+            mocked_outcome = kwargs["mocked_outcome"]
+            reversible = kwargs["reversible"]
+            token(current_policy_revision)
+            _digest(current_state_digest, field="current_state_digest")
+        except (KeyError, TypeError, ValueError):
+            idx = len(self._step_receipts) + 1
+            return self._receipt(status="denied", reason="audit_binding_mismatch", step=step, step_index=idx)
+        if current_profile not in {"read_only","recommend","approval_required","delegated_simulation"}:
+            idx = len(self._step_receipts) + 1
+            return self._receipt(status="denied", reason="audit_binding_mismatch", step=step, step_index=idx)
+        if not all(isinstance(v, bool) for v in (authority_available, cancelled, grant_revoked, reversible)) or mocked_outcome not in _ALLOWED_OUTCOMES:
+            idx = len(self._step_receipts) + 1
+            return self._receipt(status="denied", reason="audit_binding_mismatch", step=step, step_index=idx)
+
+        existing = self._receipts.get(step.delivery_id)
+        if existing is not None:
+            return existing
+        prior = self._step_receipts.get(step.step_id)
+        idx = len(self._step_receipts) + 1
+        if prior is not None:
+            if prior.status == "outcome_unknown":
+                return self._receipt(status="reconciliation_required", reason="ambiguous_prior_outcome", step=step, step_index=prior.step_index)
+            return self._receipt(status="denied", reason="duplicate_step", step=step, step_index=prior.step_index)
+
+        checks = [
+            (len(self._receipts) >= self._max_tracked_deliveries, "denied", "replay_ledger_capacity"),
+            (not authority_available, "denied", "authority_unavailable"),
+            (cancelled, "cancelled", "session_cancelled"),
+            (self._grant.revoked or grant_revoked, "denied", "grant_revoked"),
+            (current_profile != self._grant.profile, "denied", "profile_changed"),
+            (current_policy_revision != self._grant.policy_revision, "denied", "policy_changed"),
+            (current_state_digest != self._grant.state_digest, "denied", "state_changed"),
+            (now >= utc(self._grant.expires_at), "denied", "grant_expired"),
+        ]
+        for condition, status, reason in checks:
+            if condition:
+                return self._receipt(status=status, reason=reason, step=step, step_index=idx)
+        elapsed = (now - self._started_at).total_seconds()
+        if elapsed < 0:
+            return self._receipt(status="denied", reason="time_reversal", step=step, step_index=idx)
+        if elapsed > float(self._grant.max_duration_seconds):
+            return self._receipt(status="budget_exhausted", reason="time_budget", step=step, step_index=idx)
+        if len(self._step_receipts) >= self._grant.max_steps:
+            return self._receipt(status="budget_exhausted", reason="step_budget", step=step, step_index=idx)
+        if step.action_ref not in self._grant.allowed_actions:
+            return self._receipt(status="denied", reason="action_out_of_scope", step=step, step_index=idx)
+        if step.target_ref not in self._grant.allowed_targets:
+            return self._receipt(status="denied", reason="target_out_of_scope", step=step, step_index=idx)
+        cutoff = now - timedelta(seconds=60)
+        active_effect_times = [item for item in self._effect_times if item > cutoff]
+        if len(active_effect_times) >= self._grant.max_actions_per_minute:
+            return self._receipt(status="rate_limited", reason="rate_budget", step=step, step_index=idx)
+        return None
+
     def attempt_step(self,step:SimulationStep,*,audit_event:AuditEvent|None,**kwargs)->SimulationReceipt:
         if not isinstance(step,SimulationStep): raise ValueError("trusted simulation step required")
         with self._audit_gate:
             with self._lock:
-                existing=self._receipts.get(step.delivery_id)
-                if existing is not None:return existing
+                preflight = self._preflight_before_audit(step, kwargs)
+                if preflight is not None:
+                    return preflight
                 idx=len(self._step_receipts)+1
                 if self._audit_sink is None:return self._receipt(status="denied",reason="audit_unavailable",step=step,step_index=idx)
                 if not isinstance(audit_event,AuditEvent):return self._receipt(status="denied",reason="audit_unavailable",step=step,step_index=idx)
-                try:audit_now=utc(kwargs["now"])
-                except (KeyError,TypeError,ValueError):return self._receipt(status="denied",reason="audit_binding_mismatch",step=step,step_index=idx)
-                if audit_event.request_id!=step.step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=self._grant.policy_revision or audit_event.profile!=self._grant.profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!="attempted" or audit_event.outcome!="attempted" or utc(audit_event.recorded_at)!=audit_now:
+                audit_now=utc(kwargs["now"])
+                current_policy_revision=kwargs["current_policy_revision"]
+                current_profile=kwargs["current_profile"]
+                if audit_event.request_id!=step.step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=current_policy_revision or audit_event.profile!=current_profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!="attempted" or audit_event.outcome!="attempted" or utc(audit_event.recorded_at)!=audit_now:
                     return self._receipt(status="denied",reason="audit_binding_mismatch",step=step,step_index=idx)
                 try:self._audit_sink.append(audit_event)
                 except Exception:return self._receipt(status="denied",reason="audit_admission_failed",step=step,step_index=idx)
