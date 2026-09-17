@@ -36,10 +36,14 @@ jobs:
         run: python tools/check_native_release.py
       - name: Adapter contract consistency
         run: python tools/check_adapter_contract.py
+      - name: Package metadata boundary
+        run: python tools/check_package_metadata.py
       - name: Install explicit core versions
         run: python -m pip install --disable-pip-version-check -r requirements-core.txt
       - name: Tests
         run: python tools/run_tests.py
+      - name: Package artifact lifecycle
+        run: python tools/run_package_lifecycle.py
       - name: Synthetic baseline smoke
         run: python tools/run_benchmark.py --samples 600
       - name: Constrained allocation smoke
