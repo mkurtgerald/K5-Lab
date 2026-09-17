@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from mosaic_lab.stream_robustness import (
+    DEFAULT_ROBUSTNESS_SEEDS,
     evaluate_stream_robustness,
     evaluate_stream_robustness_multiseed,
     require_stream_robustness_acceptance,
@@ -26,14 +27,17 @@ class StreamRobustnessTests(unittest.TestCase):
                 self.assertLessEqual(value, 1.0, key)
 
     def test_multiseed_robustness_acceptance_is_enforced_and_non_executing(self):
-        result = require_stream_robustness_acceptance(size=600, seeds=(7, 31, 59))
+        result = require_stream_robustness_acceptance(size=600)
         self.assertEqual(result["external_actions"], 0)
         self.assertFalse(result["production_qualified"])
         self.assertTrue(result["performance_gate_established"])
         self.assertTrue(result["passed"])
-        self.assertEqual(result["seeds"], (7, 31, 59))
-        self.assertEqual(len(result["runs"]), 3)
-        self.assertGreater(result["summary"]["total_rare_samples"], 0)
+        self.assertEqual(result["seeds"], DEFAULT_ROBUSTNESS_SEEDS)
+        self.assertEqual(len(result["runs"]), len(DEFAULT_ROBUSTNESS_SEEDS))
+        self.assertGreaterEqual(
+            result["summary"]["total_rare_samples"],
+            result["criteria"]["min_total_rare_samples"],
+        )
         for key, value in result["summary"].items():
             if key != "total_rare_samples":
                 self.assertGreaterEqual(value, 0.0, key)
