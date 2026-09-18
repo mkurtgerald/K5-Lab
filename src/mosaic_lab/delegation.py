@@ -1,8 +1,8 @@
 """Delegated-simulation public surface with trusted v5 audit persistence binding.
 
-The implementation remains in the frozen core module so this boundary can add one
-narrow admission guarantee without duplicating or weakening the established
-simulation contracts.
+The implementation remains in the frozen core module so this boundary can add
+narrow persistence and fail-closed recovery guarantees without duplicating or
+weakening the established simulation contracts.
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ class _ProposalDigestAuditSink:
 
 
 class AuditedDelegatedSimulation(_core.AuditedDelegatedSimulation):
-    """Audited simulation that persists exact content-bound proposal identity."""
+    """Audited simulation with digest-bound persistence and ambiguous-failure recovery."""
 
     def __init__(
         self,
@@ -76,3 +76,105 @@ class AuditedDelegatedSimulation(_core.AuditedDelegatedSimulation):
             audit_event.version == "4"
             or audit_event.proposal_digest == self._audit_binding.proposal_digest
         )
+
+    def _record_effect_boundary_failure(self, step: SimulationStep, kwargs: dict) -> SimulationReceipt:
+        """Quarantine an admitted step when its local effect transition crashes.
+
+        Audit admission has already succeeded before control reaches the core effect
+        transition. Any unexpected failure after that point is therefore ambiguous:
+        never blind-retry it and never claim rollback. Preserve enough trusted local
+        identity to require authoritative reconciliation instead.
+        """
+        if not isinstance(step, SimulationStep):
+            raise ValueError("trusted simulation step required")
+        effect_time = _core.utc(kwargs["now"])
+        reversible = kwargs["reversible"]
+        if not isinstance(reversible, bool):
+            raise ValueError("boolean flags required")
+        with self._lock:
+            existing_step = self._delivery_steps.get(step.delivery_id)
+            if existing_step is not None and existing_step != step:
+                prior = self._receipts[step.delivery_id]
+                return self._receipt(
+                    status="denied",
+                    reason="delivery_identity_collision",
+                    step=step,
+                    step_index=prior.step_index,
+                )
+
+            prior = self._step_receipts.get(step.step_id)
+            step_index = prior.step_index if prior is not None else len(self._step_receipts) + 1
+            if prior is None:
+                receipt = self._receipt(
+                    status="outcome_unknown",
+                    reason="effect_boundary_failure",
+                    step=step,
+                    step_index=step_index,
+                    mocked_effects=0,
+                    rollback_available=False,
+                )
+            else:
+                receipt = _replace(
+                    prior,
+                    status="outcome_unknown",
+                    reason="effect_boundary_failure",
+                    mocked_effects=0,
+                    rollback_available=False,
+                )
+
+            self._step_effect_times[step.step_id] = effect_time
+            self._step_reversible[step.step_id] = reversible
+            self._step_receipts[step.step_id] = receipt
+            completed, failed, unknown = self._counts()
+            receipt = _replace(
+                receipt,
+                completed_steps=completed,
+                failed_steps=failed,
+                unknown_steps=unknown,
+            )
+            self._step_receipts[step.step_id] = receipt
+            self._delivery_steps[step.delivery_id] = step
+            self._receipts[step.delivery_id] = receipt
+            return receipt
+
+    def attempt_step(self, step: SimulationStep, *, audit_event: AuditEvent | None, **kwargs) -> SimulationReceipt:
+        try:
+            return super().attempt_step(step, audit_event=audit_event, **kwargs)
+        except (TypeError, ValueError):
+            raise
+        except Exception:
+            return self._record_effect_boundary_failure(step, kwargs)
+
+    def reconcile(
+        self,
+        step_id: str,
+        *,
+        authoritative_outcome: str,
+        reversible: bool,
+        reconciliation_binding: ReconciliationBinding | None = None,
+        audit_event: AuditEvent | None = None,
+        now=None,
+    ) -> SimulationReceipt:
+        try:
+            return super().reconcile(
+                step_id,
+                authoritative_outcome=authoritative_outcome,
+                reversible=reversible,
+                reconciliation_binding=reconciliation_binding,
+                audit_event=audit_event,
+                now=now,
+            )
+        except (TypeError, ValueError):
+            raise
+        except Exception:
+            with self._lock:
+                prior = self._step_receipts.get(step_id)
+                if prior is None:
+                    raise
+                return _replace(
+                    prior,
+                    status="reconciliation_required",
+                    reason="reconciliation_state_failure",
+                    mocked_effects=0,
+                    rollback_available=False,
+                )
