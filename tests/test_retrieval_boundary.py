@@ -127,7 +127,32 @@ class RetrievalBoundaryTests(unittest.TestCase):
             first = session.retrieve("req1", "rec1", store, scope(), current_policy_revision="policy1", now=NOW)
             second = session.retrieve("req2", "rec1", store, scope(), current_policy_revision="policy1", now=NOW)
             return first, second, session.create_checkpoint(("rec1",), now=NOW)
-        self.assertEqual(once(), once())
+        first_a, second_a, checkpoint_a = once()
+        first_b, second_b, checkpoint_b = once()
+        self.assertEqual((first_a, second_a), (first_b, second_b))
+        self.assertEqual(
+            (
+                checkpoint_a.session_id,
+                checkpoint_a.partition,
+                checkpoint_a.principal_ref,
+                checkpoint_a.policy_revision,
+                checkpoint_a.evidence_refs,
+                checkpoint_a.created_at,
+                checkpoint_a.version,
+                checkpoint_a.evidence_digests,
+            ),
+            (
+                checkpoint_b.session_id,
+                checkpoint_b.partition,
+                checkpoint_b.principal_ref,
+                checkpoint_b.policy_revision,
+                checkpoint_b.evidence_refs,
+                checkpoint_b.created_at,
+                checkpoint_b.version,
+                checkpoint_b.evidence_digests,
+            ),
+        )
+        self.assertNotEqual(checkpoint_a.session_incarnation, checkpoint_b.session_incarnation)
         with self.assertRaises(ValueError): ReadScope(partition="p1", principal_ref="principal1", profile="read_only", policy_revision="policy1", allowed_record_ids=tuple(f"r{i}" for i in range(129)), valid_until=NOW)
         with self.assertRaises(ValueError): RetrievalSession(session_id="s1", partition="p1", principal_ref="principal1", policy_revision="policy1", max_cache_entries=0)
 
