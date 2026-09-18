@@ -19,6 +19,7 @@ from .rollback import RollbackAssessment, RollbackCapabilityBinding, RollbackRes
 
 _PROFILE = "delegated_simulation"
 _ROLLBACK_OUTCOMES = frozenset({"verified_rolled_back", "rollback_failed", "rollback_unknown"})
+_MAX_UNKNOWN_RESULTS = 64
 
 
 def _digest(value: str, *, field: str) -> str:
@@ -122,6 +123,7 @@ class AuditedRollbackSimulation:
         *,
         assessment: RollbackAssessment,
         audit_sink: AuditBuffer | None,
+        max_unknown_results: int = 16,
     ) -> None:
         if not isinstance(capability, RollbackCapabilityBinding):
             raise ValueError("trusted rollback capability required")
@@ -137,12 +139,20 @@ class AuditedRollbackSimulation:
             or assessment.delivery_id != capability.delivery_id
         ):
             raise ValueError("rollback assessment does not bind capability")
+        if (
+            isinstance(max_unknown_results, bool)
+            or not isinstance(max_unknown_results, int)
+            or not 1 <= max_unknown_results <= _MAX_UNKNOWN_RESULTS
+        ):
+            raise ValueError("max_unknown_results outside bounded limit")
         self._capability = capability
         self._capability_digest = rollback_capability_digest(capability)
         self._audit_sink = audit_sink
+        self._max_unknown_results = max_unknown_results
         self._attempt: RollbackSimulationReceipt | None = None
         self._attempted_at: datetime | None = None
-        self._results: dict[str, RollbackResultBinding] = {}
+        self._results: dict[str, tuple[RollbackResultBinding, RollbackSimulationReceipt]] = {}
+        self._unknown_results = 0
         self._terminal: RollbackSimulationReceipt | None = None
         self._lock = Lock()
 
@@ -190,6 +200,30 @@ class AuditedRollbackSimulation:
             and utc(event.recorded_at) == now
         )
 
+    def _prior_attempt_audit(self, *, ignore_event_id: str) -> AuditEvent | None:
+        if self._audit_sink is None:
+            return None
+        cap = self._capability
+        for event in self._audit_sink.snapshot():
+            if event.event_id == ignore_event_id:
+                continue
+            if (
+                event.partition == cap.partition
+                and event.principal_ref == cap.principal_ref
+                and event.profile == _PROFILE
+                and event.policy_revision == cap.policy_revision
+                and event.proposal_id is None
+                and event.grant_ref is None
+                and event.bound_approval_refs == ()
+                and event.evidence_refs == (cap.capability_id,)
+                and event.evidence_digests == (self._capability_digest,)
+                and event.decision == "attempted"
+                and event.reason == "rollback_attempted"
+                and event.outcome == "attempted"
+            ):
+                return event
+        return None
+
     def attempt(
         self,
         *,
@@ -235,6 +269,21 @@ class AuditedRollbackSimulation:
                 return self._denied(request_id, "rollback_audit_binding_mismatch")
             if self._audit_sink is None:
                 return self._denied(request_id, "rollback_audit_unavailable")
+            prior_attempt = self._prior_attempt_audit(ignore_event_id=audit_event.event_id)
+            if prior_attempt is not None:
+                self._attempted_at = utc(prior_attempt.recorded_at)
+                self._attempt = self._receipt(
+                    prior_attempt.request_id,
+                    "reconciliation_required",
+                    "rollback_prior_attempt_ambiguous",
+                )
+                if request_id == prior_attempt.request_id:
+                    return self._attempt
+                return self._receipt(
+                    request_id,
+                    "reconciliation_required",
+                    "rollback_prior_attempt_ambiguous",
+                )
             try:
                 admitted = self._audit_sink.append(audit_event)
             except (RuntimeError, ValueError):
@@ -299,11 +348,12 @@ class AuditedRollbackSimulation:
                 return self._receipt(request_id, "reconciliation_required", "rollback_request_mismatch")
             existing = self._results.get(result.result_ref)
             if existing is not None:
-                if existing != result:
+                existing_result, existing_receipt = existing
+                if existing_result != result:
                     return self._receipt(
                         request_id, "reconciliation_required", "rollback_result_identity_collision"
                     )
-                return self._terminal or self._attempt
+                return existing_receipt
             if self._terminal is not None and self._terminal.status in {"verified_rolled_back", "rollback_failed"}:
                 return self._terminal
             if not self._result_matches(result):
@@ -314,6 +364,10 @@ class AuditedRollbackSimulation:
             if observed < self._attempted_at or observed > now:
                 return self._receipt(
                     request_id, "reconciliation_required", "rollback_result_time_mismatch"
+                )
+            if result.outcome == "rollback_unknown" and self._unknown_results >= self._max_unknown_results:
+                return self._receipt(
+                    request_id, "reconciliation_required", "rollback_result_ledger_capacity"
                 )
             if not self._result_audit_matches(audit_event, request_id, result, now):
                 return self._receipt(
@@ -329,8 +383,11 @@ class AuditedRollbackSimulation:
                 return self._receipt(
                     request_id, "reconciliation_required", "rollback_audit_replay_ambiguous"
                 )
-            self._results[result.result_ref] = result
-            self._terminal = self._receipt(
+            receipt = self._receipt(
                 request_id, result.outcome, "rollback_reconciled", result=result
             )
-            return self._terminal
+            self._results[result.result_ref] = (result, receipt)
+            if result.outcome == "rollback_unknown":
+                self._unknown_results += 1
+            self._terminal = receipt
+            return receipt
