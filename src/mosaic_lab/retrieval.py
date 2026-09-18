@@ -454,6 +454,8 @@ class RetrievalSession:
                 if self._integrity_failed:
                     return self._receipt(request_id, record_id, "denied", "session_integrity_failure")
                 record = self._cache.get(record_id)
+                if record is None and len(self._cache) >= self._max_cache_entries:
+                    return self._receipt(request_id, record_id, "denied", "cache_capacity")
             cached = record is not None
             if record is None:
                 self._source_active = True
