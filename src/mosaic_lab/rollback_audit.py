@@ -63,6 +63,18 @@ def _audit_outcome(rollback_outcome: str) -> str:
         raise ValueError("unsupported rollback outcome") from exc
 
 
+def _rollback_outcome_from_audit(audit_outcome: str) -> str:
+    mapping = {
+        "verified_complete": "verified_rolled_back",
+        "failed": "rollback_failed",
+        "outcome_unknown": "rollback_unknown",
+    }
+    try:
+        return mapping[audit_outcome]
+    except KeyError as exc:
+        raise ValueError("unsupported rollback audit outcome") from exc
+
+
 @dataclass(frozen=True)
 class RollbackSimulationReceipt:
     status: str
@@ -152,9 +164,13 @@ class AuditedRollbackSimulation:
         self._attempt: RollbackSimulationReceipt | None = None
         self._attempted_at: datetime | None = None
         self._results: dict[str, tuple[RollbackResultBinding, RollbackSimulationReceipt]] = {}
+        self._recovered_results: dict[str, tuple[str, str, RollbackSimulationReceipt]] = {}
         self._unknown_results = 0
         self._terminal: RollbackSimulationReceipt | None = None
+        self._restart_audit_ambiguous = False
+        self._recovered_attempt_event_id: str | None = None
         self._lock = Lock()
+        self._restore_from_audit()
 
     def _denied(self, request_id: str, reason: str) -> RollbackSimulationReceipt:
         return RollbackSimulationReceipt(
@@ -181,17 +197,138 @@ class AuditedRollbackSimulation:
             None if result is None else result.result_digest,
         )
 
-    def _attempt_audit_matches(self, event: AuditEvent, request_id: str, now: datetime) -> bool:
+    def _receipt_from_result(
+        self,
+        request_id: str,
+        status: str,
+        result_ref: str,
+        result_digest: str,
+    ) -> RollbackSimulationReceipt:
+        return RollbackSimulationReceipt(
+            status, "rollback_reconciled", request_id, self._capability.session_id,
+            self._capability.step_id, self._capability.delivery_id,
+            self._capability.capability_id, self._capability_digest, 0, True,
+            result_ref, result_digest,
+        )
+
+    def _base_audit_matches(self, event: AuditEvent) -> bool:
         cap = self._capability
         return (
-            event.request_id == request_id
-            and event.partition == cap.partition
+            event.partition == cap.partition
             and event.principal_ref == cap.principal_ref
             and event.profile == _PROFILE
             and event.policy_revision == cap.policy_revision
             and event.proposal_id is None
             and event.grant_ref is None
             and event.bound_approval_refs == ()
+        )
+
+    def _restore_from_audit(self) -> None:
+        """Reconstruct bounded rollback state from already-admitted audit evidence.
+
+        AuditBuffer remains non-durable. This only proves the reconstruction
+        contract against a supplied authoritative snapshot; downstream adapters
+        must provide durable/tamper-evident storage separately.
+        """
+        if self._audit_sink is None:
+            return
+        events = self._audit_sink.snapshot()
+        attempts: list[AuditEvent] = []
+        has_result_event = False
+        for event in events:
+            if not self._base_audit_matches(event):
+                continue
+            if (
+                event.reason == "rollback_reconciled"
+                and event.decision == "returned"
+                and event.evidence_refs
+                and event.evidence_refs[0] == self._capability.capability_id
+            ):
+                has_result_event = True
+            if (
+                event.reason == "rollback_attempted"
+                and event.decision == "attempted"
+                and event.outcome == "attempted"
+            ):
+                if (
+                    event.evidence_refs != (self._capability.capability_id,)
+                    or event.evidence_digests != (self._capability_digest,)
+                ):
+                    if self._capability.capability_id in event.evidence_refs:
+                        self._restart_audit_ambiguous = True
+                    continue
+                attempts.append(event)
+        if not attempts:
+            if has_result_event:
+                self._restart_audit_ambiguous = True
+            return
+        if len(attempts) != 1:
+            self._restart_audit_ambiguous = True
+            return
+
+        attempt = attempts[0]
+        self._attempted_at = utc(attempt.recorded_at)
+        self._recovered_attempt_event_id = attempt.event_id
+        self._attempt = self._receipt(
+            attempt.request_id,
+            "reconciliation_required",
+            "rollback_prior_attempt_ambiguous",
+        )
+
+        definitive_seen = False
+        seen_result_refs: set[str] = set()
+        for event in events:
+            if (
+                not self._base_audit_matches(event)
+                or event.reason != "rollback_reconciled"
+                or event.decision != "returned"
+            ):
+                continue
+            if not event.evidence_refs or event.evidence_refs[0] != self._capability.capability_id:
+                continue
+            if (
+                len(event.evidence_refs) != 2
+                or len(event.evidence_digests) != 2
+                or event.evidence_digests[0] != self._capability_digest
+                or event.request_id != attempt.request_id
+                or utc(event.recorded_at) < self._attempted_at
+            ):
+                self._restart_audit_ambiguous = True
+                return
+            try:
+                status = _rollback_outcome_from_audit(event.outcome)
+            except ValueError:
+                self._restart_audit_ambiguous = True
+                return
+            result_ref = event.evidence_refs[1]
+            result_digest = event.evidence_digests[1]
+            if result_ref == self._capability.capability_id or result_ref in seen_result_refs:
+                self._restart_audit_ambiguous = True
+                return
+            seen_result_refs.add(result_ref)
+            if definitive_seen:
+                self._restart_audit_ambiguous = True
+                return
+            receipt = self._receipt_from_result(
+                attempt.request_id,
+                status,
+                result_ref,
+                result_digest,
+            )
+            if status == "rollback_unknown":
+                self._unknown_results += 1
+                if len(self._recovered_results) < self._max_unknown_results:
+                    self._recovered_results[result_ref] = (result_digest, status, receipt)
+            else:
+                self._recovered_results[result_ref] = (result_digest, status, receipt)
+                definitive_seen = True
+            self._terminal = receipt
+
+    def _attempt_audit_matches(self, event: AuditEvent, request_id: str, now: datetime) -> bool:
+        cap = self._capability
+        return (
+            event.request_id == request_id
+            and self._base_audit_matches(event)
             and event.evidence_refs == (cap.capability_id,)
             and event.evidence_digests == (self._capability_digest,)
             and event.decision == "attempted"
@@ -208,13 +345,7 @@ class AuditedRollbackSimulation:
             if event.event_id == ignore_event_id:
                 continue
             if (
-                event.partition == cap.partition
-                and event.principal_ref == cap.principal_ref
-                and event.profile == _PROFILE
-                and event.policy_revision == cap.policy_revision
-                and event.proposal_id is None
-                and event.grant_ref is None
-                and event.bound_approval_refs == ()
+                self._base_audit_matches(event)
                 and event.evidence_refs == (cap.capability_id,)
                 and event.evidence_digests == (self._capability_digest,)
                 and event.decision == "attempted"
@@ -248,9 +379,23 @@ class AuditedRollbackSimulation:
         if not isinstance(audit_event, AuditEvent):
             raise ValueError("audit event required")
         with self._lock:
+            if self._restart_audit_ambiguous:
+                return self._receipt(
+                    request_id,
+                    "reconciliation_required",
+                    "rollback_restart_audit_ambiguous",
+                )
             if self._attempt is not None:
+                if self._terminal is None and self._recovered_attempt_event_id == audit_event.event_id:
+                    return self._denied(request_id, "rollback_audit_replay_ambiguous")
                 if request_id == self._attempt.request_id:
                     return self._terminal or self._attempt
+                if self._attempt.reason == "rollback_prior_attempt_ambiguous":
+                    return self._receipt(
+                        request_id,
+                        "reconciliation_required",
+                        "rollback_prior_attempt_ambiguous",
+                    )
                 return self._receipt(request_id, "reconciliation_required", "rollback_already_attempted")
             checks = (
                 (not authority_available, "authority_unavailable"),
@@ -312,13 +457,7 @@ class AuditedRollbackSimulation:
         cap = self._capability
         return (
             event.request_id == request_id
-            and event.partition == cap.partition
-            and event.principal_ref == cap.principal_ref
-            and event.profile == _PROFILE
-            and event.policy_revision == cap.policy_revision
-            and event.proposal_id is None
-            and event.grant_ref is None
-            and event.bound_approval_refs == ()
+            and self._base_audit_matches(event)
             and event.evidence_refs == (cap.capability_id, result.result_ref)
             and event.evidence_digests == (self._capability_digest, result.result_digest)
             and event.decision == "returned"
@@ -342,6 +481,12 @@ class AuditedRollbackSimulation:
         if not isinstance(audit_event, AuditEvent):
             raise ValueError("audit event required")
         with self._lock:
+            if self._restart_audit_ambiguous:
+                return self._receipt(
+                    request_id,
+                    "reconciliation_required",
+                    "rollback_restart_audit_ambiguous",
+                )
             if self._attempt is None or self._attempted_at is None:
                 return self._denied(request_id, "rollback_not_attempted")
             if request_id != self._attempt.request_id:
@@ -354,6 +499,14 @@ class AuditedRollbackSimulation:
                         request_id, "reconciliation_required", "rollback_result_identity_collision"
                     )
                 return existing_receipt
+            recovered = self._recovered_results.get(result.result_ref)
+            if recovered is not None:
+                recovered_digest, recovered_status, recovered_receipt = recovered
+                if result.result_digest != recovered_digest or result.outcome != recovered_status:
+                    return self._receipt(
+                        request_id, "reconciliation_required", "rollback_result_identity_collision"
+                    )
+                return recovered_receipt
             if self._terminal is not None and self._terminal.status in {"verified_rolled_back", "rollback_failed"}:
                 return self._terminal
             if not self._result_matches(result):
