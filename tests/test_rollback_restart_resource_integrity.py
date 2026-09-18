@@ -164,7 +164,7 @@ def test_restart_snapshot_over_unknown_result_bound_blocks_growth_without_audit_
     )
 
     assert blocked.status == "reconciliation_required"
-    assert blocked.reason == "rollback_result_ledger_capacity"
+    assert blocked.reason == "rollback_restart_audit_ambiguous"
     assert blocked.mocked_rollbacks == 0
     assert blocked.authorized is False
     assert blocked.execute is False
