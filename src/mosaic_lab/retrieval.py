@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from math import isfinite
-from threading import Lock
+from threading import Lock, RLock
 from typing import Protocol
 
 from .contracts import token, utc
@@ -199,6 +199,59 @@ class EvidenceSource(Protocol):
     def get(self, partition: str, record_id: str) -> EvidenceRecord | None: ...
 
 
+def _clone_record(record: EvidenceRecord) -> EvidenceRecord:
+    return EvidenceRecord(
+        partition=record.partition,
+        record_id=record.record_id,
+        source_ref=record.source_ref,
+        observed_at=record.observed_at,
+        text=record.text,
+        origin=record.origin,
+        version=record.version,
+    )
+
+
+def _clone_scope(scope: ReadScope) -> ReadScope:
+    return ReadScope(
+        partition=scope.partition,
+        principal_ref=scope.principal_ref,
+        profile=scope.profile,
+        policy_revision=scope.policy_revision,
+        allowed_record_ids=tuple(scope.allowed_record_ids),
+        valid_until=scope.valid_until,
+        authenticated=scope.authenticated,
+        version=scope.version,
+    )
+
+
+def _restore_scope(scope: ReadScope, trusted: ReadScope) -> None:
+    for field in (
+        "partition",
+        "principal_ref",
+        "profile",
+        "policy_revision",
+        "allowed_record_ids",
+        "valid_until",
+        "authenticated",
+        "version",
+    ):
+        object.__setattr__(scope, field, getattr(trusted, field))
+
+
+@dataclass(frozen=True)
+class _RetrievalSessionSnapshot:
+    session_id: str
+    partition: str
+    principal_ref: str
+    policy_revision: str
+    max_cache_entries: int
+    cache: tuple[tuple[str, EvidenceRecord], ...]
+    integrity_failed: bool
+    source_active: bool
+    lock: object
+    source_lock: object
+
+
 class SyntheticEvidenceStore:
     """Bounded in-memory synthetic store; not a production persistence layer."""
 
@@ -259,14 +312,68 @@ class RetrievalSession:
         self.policy_revision = policy_revision
         self._max_cache_entries = max_cache_entries
         self._cache: dict[str, EvidenceRecord] = {}
+        self._integrity_failed = False
+        self._source_active = False
         self._lock = Lock()
+        self._source_lock = RLock()
 
     @property
     def cache_size(self) -> int:
         with self._lock:
             return len(self._cache)
 
+    def _snapshot_state(self) -> _RetrievalSessionSnapshot:
+        with self._lock:
+            cache = tuple((record_id, _clone_record(record)) for record_id, record in sorted(self._cache.items()))
+        return _RetrievalSessionSnapshot(
+            self.session_id,
+            self.partition,
+            self.principal_ref,
+            self.policy_revision,
+            self._max_cache_entries,
+            cache,
+            self._integrity_failed,
+            self._source_active,
+            self._lock,
+            self._source_lock,
+        )
+
+    def _matches_snapshot(self, snapshot: _RetrievalSessionSnapshot) -> bool:
+        try:
+            current_cache = tuple((record_id, _clone_record(record)) for record_id, record in sorted(self._cache.items()))
+            return (
+                self.session_id == snapshot.session_id
+                and self.partition == snapshot.partition
+                and self.principal_ref == snapshot.principal_ref
+                and self.policy_revision == snapshot.policy_revision
+                and type(self._max_cache_entries) is int
+                and self._max_cache_entries == snapshot.max_cache_entries
+                and current_cache == snapshot.cache
+                and type(self._integrity_failed) is bool
+                and self._integrity_failed is snapshot.integrity_failed
+                and type(self._source_active) is bool
+                and self._source_active is snapshot.source_active
+                and self._lock is snapshot.lock
+                and self._source_lock is snapshot.source_lock
+            )
+        except Exception:
+            return False
+
+    def _restore_state(self, snapshot: _RetrievalSessionSnapshot) -> None:
+        self.session_id = snapshot.session_id
+        self.partition = snapshot.partition
+        self.principal_ref = snapshot.principal_ref
+        self.policy_revision = snapshot.policy_revision
+        self._max_cache_entries = snapshot.max_cache_entries
+        self._cache = {record_id: _clone_record(record) for record_id, record in snapshot.cache}
+        self._integrity_failed = snapshot.integrity_failed
+        self._source_active = snapshot.source_active
+        self._lock = snapshot.lock
+        self._source_lock = snapshot.source_lock
+
     def _scope_reason(self, scope: ReadScope, *, current_policy_revision: str, now: datetime) -> str | None:
+        if self._integrity_failed:
+            return "session_integrity_failure"
         if not isinstance(scope, ReadScope):
             return "invalid_scope"
         token(current_policy_revision)
@@ -314,57 +421,98 @@ class RetrievalSession:
         now = utc(now)
         if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, (int, float)) or not isfinite(float(max_age_seconds)) or max_age_seconds <= 0:
             raise ValueError("max_age_seconds outside bounded limit")
+        if type(scope) is not ReadScope:
+            return self._receipt(request_id, record_id, "denied", "invalid_scope")
+        try:
+            trusted_scope = _clone_scope(scope)
+        except Exception:
+            return self._receipt(request_id, record_id, "denied", "invalid_scope")
 
-        reason = self._scope_reason(scope, current_policy_revision=current_policy_revision, now=now)
+        reason = self._scope_reason(trusted_scope, current_policy_revision=current_policy_revision, now=now)
         if reason is not None:
             return self._receipt(request_id, record_id, "denied", reason)
-        if record_id not in scope.allowed_record_ids:
+        if record_id not in trusted_scope.allowed_record_ids:
             return self._receipt(request_id, record_id, "denied", "record_out_of_scope")
 
-        with self._lock:
-            record = self._cache.get(record_id)
-        cached = record is not None
-        if record is None:
-            try:
-                record = source.get(self.partition, record_id)
-            except Exception:
-                return self._receipt(request_id, record_id, "unavailable", "source_unavailable")
-            if record is None:
-                return self._receipt(request_id, record_id, "abstain", "missing_evidence")
-
-        reason = self._scope_reason(scope, current_policy_revision=current_policy_revision, now=now)
-        if reason is not None:
-            return self._receipt(request_id, record_id, "denied", reason)
-        if record_id not in scope.allowed_record_ids:
-            return self._receipt(request_id, record_id, "denied", "record_out_of_scope")
-        if not isinstance(record, EvidenceRecord):
-            return self._receipt(request_id, record_id, "denied", "invalid_evidence_type")
-        if record.partition != self.partition:
-            return self._receipt(request_id, record_id, "denied", "cross_partition_evidence")
-        if record.record_id != record_id:
-            return self._receipt(request_id, record_id, "denied", "reference_mismatch")
-        age = (now - utc(record.observed_at)).total_seconds()
-        if age < 0:
-            return self._receipt(request_id, record_id, "abstain", "future_evidence")
-        if age > float(max_age_seconds):
-            return self._receipt(request_id, record_id, "abstain", "stale_evidence")
-
-        if not cached:
+        with self._source_lock:
+            if self._source_active:
+                return self._receipt(request_id, record_id, "denied", "source_reentry")
             with self._lock:
-                existing = self._cache.get(record_id)
-                if existing is not None and existing != record:
-                    return self._receipt(request_id, record_id, "denied", "cache_identity_collision")
-                if existing is None:
-                    if len(self._cache) >= self._max_cache_entries:
-                        return self._receipt(request_id, record_id, "denied", "cache_capacity")
-                    self._cache[record_id] = record
+                if self._integrity_failed:
+                    return self._receipt(request_id, record_id, "denied", "session_integrity_failure")
+                record = self._cache.get(record_id)
+            cached = record is not None
+            if record is None:
+                self._source_active = True
+                snapshot = self._snapshot_state()
+                try:
+                    record = source.get(snapshot.partition, record_id)
+                except Exception:
+                    session_ok = self._matches_snapshot(snapshot)
+                    scope_ok = scope == trusted_scope
+                    if not session_ok or not scope_ok:
+                        if not session_ok:
+                            self._restore_state(snapshot)
+                        if not scope_ok:
+                            try:
+                                _restore_scope(scope, trusted_scope)
+                            except Exception:
+                                pass
+                        self._source_active = False
+                        self._integrity_failed = True
+                        return self._receipt(request_id, record_id, "denied", "session_integrity_failure")
+                    self._source_active = False
+                    return self._receipt(request_id, record_id, "unavailable", "source_unavailable")
+                session_ok = self._matches_snapshot(snapshot)
+                scope_ok = scope == trusted_scope
+                if not session_ok or not scope_ok:
+                    if not session_ok:
+                        self._restore_state(snapshot)
+                    if not scope_ok:
+                        try:
+                            _restore_scope(scope, trusted_scope)
+                        except Exception:
+                            pass
+                    self._source_active = False
+                    self._integrity_failed = True
+                    return self._receipt(request_id, record_id, "denied", "session_integrity_failure")
+                self._source_active = False
+                if record is None:
+                    return self._receipt(request_id, record_id, "abstain", "missing_evidence")
 
-        reason = self._scope_reason(scope, current_policy_revision=current_policy_revision, now=now)
-        if reason is not None:
-            return self._receipt(request_id, record_id, "denied", reason)
-        if record_id not in scope.allowed_record_ids:
-            return self._receipt(request_id, record_id, "denied", "record_out_of_scope")
-        return self._receipt(request_id, record_id, "returned", "evidence_returned", record=record, cached=cached)
+            reason = self._scope_reason(trusted_scope, current_policy_revision=current_policy_revision, now=now)
+            if reason is not None:
+                return self._receipt(request_id, record_id, "denied", reason)
+            if record_id not in trusted_scope.allowed_record_ids:
+                return self._receipt(request_id, record_id, "denied", "record_out_of_scope")
+            if not isinstance(record, EvidenceRecord):
+                return self._receipt(request_id, record_id, "denied", "invalid_evidence_type")
+            if record.partition != self.partition:
+                return self._receipt(request_id, record_id, "denied", "cross_partition_evidence")
+            if record.record_id != record_id:
+                return self._receipt(request_id, record_id, "denied", "reference_mismatch")
+            age = (now - utc(record.observed_at)).total_seconds()
+            if age < 0:
+                return self._receipt(request_id, record_id, "abstain", "future_evidence")
+            if age > float(max_age_seconds):
+                return self._receipt(request_id, record_id, "abstain", "stale_evidence")
+
+            if not cached:
+                with self._lock:
+                    existing = self._cache.get(record_id)
+                    if existing is not None and existing != record:
+                        return self._receipt(request_id, record_id, "denied", "cache_identity_collision")
+                    if existing is None:
+                        if len(self._cache) >= self._max_cache_entries:
+                            return self._receipt(request_id, record_id, "denied", "cache_capacity")
+                        self._cache[record_id] = record
+
+            reason = self._scope_reason(trusted_scope, current_policy_revision=current_policy_revision, now=now)
+            if reason is not None:
+                return self._receipt(request_id, record_id, "denied", reason)
+            if record_id not in trusted_scope.allowed_record_ids:
+                return self._receipt(request_id, record_id, "denied", "record_out_of_scope")
+            return self._receipt(request_id, record_id, "returned", "evidence_returned", record=record, cached=cached)
 
     def create_checkpoint(self, evidence_refs: tuple[str, ...], *, now: datetime) -> RetrievalCheckpoint:
         if not isinstance(evidence_refs, tuple) or len(evidence_refs) > _MAX_CHECKPOINT_RECORDS:
@@ -374,6 +522,8 @@ class RetrievalSession:
         for record_id in evidence_refs:
             token(record_id)
         with self._lock:
+            if self._integrity_failed:
+                raise RuntimeError("session_integrity_failure")
             records = tuple(self._cache.get(record_id) for record_id in evidence_refs)
         if any(record is None for record in records):
             raise ValueError("checkpoint cannot reference uncached evidence")
@@ -400,6 +550,8 @@ class RetrievalSession:
         now = utc(now)
         if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, (int, float)) or not isfinite(float(max_age_seconds)) or max_age_seconds <= 0:
             raise ValueError("max_age_seconds outside bounded limit")
+        if self._integrity_failed:
+            return CheckpointCheck("denied", "session_integrity_failure", self.session_id)
         if not isinstance(checkpoint, RetrievalCheckpoint):
             return CheckpointCheck("denied", "invalid_checkpoint", self.session_id)
         if (
