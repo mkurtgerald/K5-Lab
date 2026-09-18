@@ -15,6 +15,7 @@ from threading import Lock, RLock
 from typing import Protocol
 
 from .contracts import token, utc
+from .request_ledger import BoundedRequestLedger, RequestBinding, RequestLedgerSnapshot
 
 _ALLOWED_PROFILES = frozenset({"read_only", "recommend", "approval_required", "delegated_simulation"})
 _ALLOWED_ORIGINS = frozenset({"record", "retrieved_text", "message", "tool_result"})
@@ -263,6 +264,9 @@ class _RetrievalSessionSnapshot:
     source_active: bool
     lock: object
     source_lock: object
+    request_ledger: BoundedRequestLedger
+    request_ledger_snapshot: RequestLedgerSnapshot
+    request_ledger_lock: object
 
 
 class SyntheticEvidenceStore:
@@ -314,6 +318,7 @@ class RetrievalSession:
         principal_ref: str,
         policy_revision: str,
         max_cache_entries: int = 128,
+        max_request_entries: int = 1024,
     ) -> None:
         for value in (session_id, partition, principal_ref, policy_revision):
             token(value)
@@ -329,15 +334,21 @@ class RetrievalSession:
         self._source_active = False
         self._lock = Lock()
         self._source_lock = RLock()
+        self._request_ledger = BoundedRequestLedger(max_entries=max_request_entries)
 
     @property
     def cache_size(self) -> int:
         with self._lock:
             return len(self._cache)
 
+    @property
+    def request_count(self) -> int:
+        return self._request_ledger.entry_count
+
     def _snapshot_state(self) -> _RetrievalSessionSnapshot:
         with self._lock:
             cache = tuple((record_id, _clone_record(record)) for record_id, record in sorted(self._cache.items()))
+        request_ledger = self._request_ledger
         return _RetrievalSessionSnapshot(
             self.session_id,
             self.partition,
@@ -349,11 +360,15 @@ class RetrievalSession:
             self._source_active,
             self._lock,
             self._source_lock,
+            request_ledger,
+            request_ledger.snapshot(),
+            request_ledger._lock,
         )
 
     def _matches_snapshot(self, snapshot: _RetrievalSessionSnapshot) -> bool:
         try:
             current_cache = tuple((record_id, _clone_record(record)) for record_id, record in sorted(self._cache.items()))
+            request_ledger = self._request_ledger
             return (
                 self.session_id == snapshot.session_id
                 and self.partition == snapshot.partition
@@ -368,11 +383,19 @@ class RetrievalSession:
                 and self._source_active is snapshot.source_active
                 and self._lock is snapshot.lock
                 and self._source_lock is snapshot.source_lock
+                and request_ledger is snapshot.request_ledger
+                and request_ledger._lock is snapshot.request_ledger_lock
+                and request_ledger.snapshot() == snapshot.request_ledger_snapshot
             )
         except Exception:
             return False
 
     def _restore_state(self, snapshot: _RetrievalSessionSnapshot) -> None:
+        request_ledger = snapshot.request_ledger
+        request_ledger._lock = snapshot.request_ledger_lock
+        with request_ledger._lock:
+            request_ledger._max_entries = snapshot.request_ledger_snapshot.max_entries
+            request_ledger._bindings = dict(snapshot.request_ledger_snapshot.bindings)
         self.session_id = snapshot.session_id
         self.partition = snapshot.partition
         self.principal_ref = snapshot.principal_ref
@@ -383,6 +406,7 @@ class RetrievalSession:
         self._source_active = snapshot.source_active
         self._lock = snapshot.lock
         self._source_lock = snapshot.source_lock
+        self._request_ledger = request_ledger
 
     def _scope_reason(self, scope: ReadScope, *, current_policy_revision: str, now: datetime) -> str | None:
         if self._integrity_failed:
@@ -456,6 +480,19 @@ class RetrievalSession:
                 record = self._cache.get(record_id)
                 if record is None and len(self._cache) >= self._max_cache_entries:
                     return self._receipt(request_id, record_id, "denied", "cache_capacity")
+            admission = self._request_ledger.admit(
+                RequestBinding(
+                    request_id=request_id,
+                    session_id=self.session_id,
+                    partition=self.partition,
+                    principal_ref=self.principal_ref,
+                    policy_revision=current_policy_revision,
+                    operation="retrieve",
+                    subject_ref=record_id,
+                )
+            )
+            if admission.status != "accepted":
+                return self._receipt(request_id, record_id, "denied", admission.reason)
             cached = record is not None
             if record is None:
                 self._source_active = True
