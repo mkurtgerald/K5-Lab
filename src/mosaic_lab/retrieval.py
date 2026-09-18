@@ -224,6 +224,19 @@ def _clone_scope(scope: ReadScope) -> ReadScope:
     )
 
 
+def _clone_checkpoint(checkpoint: RetrievalCheckpoint) -> RetrievalCheckpoint:
+    return RetrievalCheckpoint(
+        session_id=checkpoint.session_id,
+        partition=checkpoint.partition,
+        principal_ref=checkpoint.principal_ref,
+        policy_revision=checkpoint.policy_revision,
+        evidence_refs=tuple(checkpoint.evidence_refs),
+        created_at=checkpoint.created_at,
+        version=checkpoint.version,
+        evidence_digests=tuple(checkpoint.evidence_digests),
+    )
+
+
 def _restore_scope(scope: ReadScope, trusted: ReadScope) -> None:
     for field in (
         "partition",
@@ -479,13 +492,19 @@ class RetrievalSession:
                 self._source_active = False
                 if record is None:
                     return self._receipt(request_id, record_id, "abstain", "missing_evidence")
+                if type(record) is not EvidenceRecord:
+                    return self._receipt(request_id, record_id, "denied", "invalid_evidence_type")
+                try:
+                    record = _clone_record(record)
+                except Exception:
+                    return self._receipt(request_id, record_id, "denied", "invalid_evidence_type")
 
             reason = self._scope_reason(trusted_scope, current_policy_revision=current_policy_revision, now=now)
             if reason is not None:
                 return self._receipt(request_id, record_id, "denied", reason)
             if record_id not in trusted_scope.allowed_record_ids:
                 return self._receipt(request_id, record_id, "denied", "record_out_of_scope")
-            if not isinstance(record, EvidenceRecord):
+            if type(record) is not EvidenceRecord:
                 return self._receipt(request_id, record_id, "denied", "invalid_evidence_type")
             if record.partition != self.partition:
                 return self._receipt(request_id, record_id, "denied", "cross_partition_evidence")
@@ -552,32 +571,47 @@ class RetrievalSession:
             raise ValueError("max_age_seconds outside bounded limit")
         if self._integrity_failed:
             return CheckpointCheck("denied", "session_integrity_failure", self.session_id)
-        if not isinstance(checkpoint, RetrievalCheckpoint):
+        if type(checkpoint) is not RetrievalCheckpoint:
             return CheckpointCheck("denied", "invalid_checkpoint", self.session_id)
+        try:
+            trusted_checkpoint = _clone_checkpoint(checkpoint)
+        except Exception:
+            return CheckpointCheck("denied", "invalid_checkpoint", self.session_id)
+        if type(scope) is not ReadScope:
+            return CheckpointCheck("denied", "invalid_scope", self.session_id)
+        try:
+            trusted_scope = _clone_scope(scope)
+        except Exception:
+            return CheckpointCheck("denied", "invalid_scope", self.session_id)
         if (
-            checkpoint.session_id != self.session_id
-            or checkpoint.partition != self.partition
-            or checkpoint.principal_ref != self.principal_ref
+            trusted_checkpoint.session_id != self.session_id
+            or trusted_checkpoint.partition != self.partition
+            or trusted_checkpoint.principal_ref != self.principal_ref
         ):
             return CheckpointCheck("denied", "checkpoint_session_mismatch", self.session_id)
-        reason = self._scope_reason(scope, current_policy_revision=current_policy_revision, now=now)
+        reason = self._scope_reason(trusted_scope, current_policy_revision=current_policy_revision, now=now)
         if reason is not None:
             return CheckpointCheck("denied", reason, self.session_id)
-        if checkpoint.policy_revision != current_policy_revision:
+        if trusted_checkpoint.policy_revision != current_policy_revision:
             return CheckpointCheck("denied", "checkpoint_policy_changed", self.session_id)
-        checkpoint_age = (now - utc(checkpoint.created_at)).total_seconds()
+        checkpoint_age = (now - utc(trusted_checkpoint.created_at)).total_seconds()
         if checkpoint_age < 0:
             return CheckpointCheck("denied", "checkpoint_future", self.session_id)
         if checkpoint_age > float(max_age_seconds):
             return CheckpointCheck("denied", "checkpoint_stale", self.session_id)
         with self._lock:
-            records = tuple(self._cache.get(record_id) for record_id in checkpoint.evidence_refs)
+            records = tuple(self._cache.get(record_id) for record_id in trusted_checkpoint.evidence_refs)
         if any(record is None for record in records):
             return CheckpointCheck("denied", "checkpoint_cache_missing", self.session_id)
-        for record_id, expected_digest, record in zip(checkpoint.evidence_refs, checkpoint.evidence_digests, records, strict=True):
-            if record_id not in scope.allowed_record_ids:
+        for record_id, expected_digest, record in zip(
+            trusted_checkpoint.evidence_refs,
+            trusted_checkpoint.evidence_digests,
+            records,
+            strict=True,
+        ):
+            if record_id not in trusted_scope.allowed_record_ids:
                 return CheckpointCheck("denied", "record_out_of_scope", self.session_id)
-            if record is None or record.partition != self.partition or record.record_id != record_id:
+            if record is None or type(record) is not EvidenceRecord or record.partition != self.partition or record.record_id != record_id:
                 return CheckpointCheck("denied", "checkpoint_binding_invalid", self.session_id)
             try:
                 current_digest = record.content_digest
@@ -590,4 +624,4 @@ class RetrievalSession:
                 return CheckpointCheck("denied", "checkpoint_evidence_future", self.session_id)
             if evidence_age > float(max_age_seconds):
                 return CheckpointCheck("denied", "checkpoint_evidence_stale", self.session_id)
-        return CheckpointCheck("accepted_for_read", "checkpoint_valid", self.session_id, checkpoint.evidence_refs)
+        return CheckpointCheck("accepted_for_read", "checkpoint_valid", self.session_id, trusted_checkpoint.evidence_refs)
