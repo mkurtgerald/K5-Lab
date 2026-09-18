@@ -58,10 +58,27 @@ class AuditContractTests(unittest.TestCase):
         self.assertEqual(item.evidence_refs, ("rec1",))
         self.assertEqual(item.evidence_digests, (EVIDENCE_DIGEST,))
         self.assertEqual(item.approval_ref, "approval1")
+        self.assertEqual(item.bound_approval_refs, ("approval1",))
         self.assertEqual(item.outcome, "denied")
-        self.assertEqual(item.version, "2")
+        self.assertEqual(item.version, "3")
         self.assertFalse(hasattr(item, "reasoning"))
         self.assertFalse(hasattr(item, "details"))
+
+    def test_multi_approval_identity_is_explicit_and_bounded(self):
+        item = event(
+            approval_ref=None,
+            approval_refs=("approval1", "approval2"),
+        )
+        self.assertEqual(item.bound_approval_refs, ("approval1", "approval2"))
+        with self.assertRaises(ValueError):
+            event(approval_refs=("approval1",))
+        with self.assertRaises(ValueError):
+            event(approval_ref=None, approval_refs=("approval1", "approval1"))
+        with self.assertRaises(ValueError):
+            event(
+                approval_ref=None,
+                approval_refs=("approval1", "approval2", "approval3", "approval4", "approval5"),
+            )
 
     def test_denial_cancellation_revocation_failure_and_unknown_outcomes_are_representable(self):
         cases = (
@@ -128,6 +145,7 @@ class AuditContractTests(unittest.TestCase):
         self.assertEqual(historical.events[0].policy_revision, "policy1")
         unauthenticated = buffer.read_partition("p1", scope(authenticated=False), current_policy_revision="policy1", now=NOW)
         self.assertEqual((unauthenticated.status, unauthenticated.reason), ("denied", "audit_unauthenticated"))
+        self.assertEqual(unauthenticated.events, ())
 
     def test_tokens_bounds_and_evidence_binding_fail_closed(self):
         with self.assertRaises(ValueError):
@@ -139,7 +157,7 @@ class AuditContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             event(evidence_digests=("not-a-digest",))
         with self.assertRaises(ValueError):
-            event(version="1")
+            event(version="2")
         with self.assertRaises(ValueError):
             AuditBuffer(max_entries=0)
 

@@ -184,19 +184,16 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
                 raise ValueError("trusted audit binding required")
             if audit_binding.proposal_digest != grant.proposal_digest:
                 raise ValueError("audit proposal digest mismatch")
-            if len(audit_binding.approval_refs) > 1:
-                raise ValueError("audit schema cannot bind multiple approvals")
         self._audit_sink=audit_sink
         self._audit_binding=audit_binding
         self._audit_gate=Lock()
 
     def _audit_event_matches_upstream(self, audit_event: AuditEvent) -> bool:
         if self._audit_binding is None:
-            return audit_event.approval_ref is None and not audit_event.evidence_refs and not audit_event.evidence_digests
-        expected_approval = self._audit_binding.approval_refs[0] if self._audit_binding.approval_refs else None
+            return not audit_event.bound_approval_refs and not audit_event.evidence_refs and not audit_event.evidence_digests
         return (
             audit_event.proposal_id == self._audit_binding.proposal_id
-            and audit_event.approval_ref == expected_approval
+            and audit_event.bound_approval_refs == self._audit_binding.approval_refs
             and audit_event.evidence_refs == self._audit_binding.evidence_refs
             and audit_event.evidence_digests == self._audit_binding.evidence_digests
         )

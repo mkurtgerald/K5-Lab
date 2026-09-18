@@ -255,21 +255,65 @@ def test_unbound_audit_cannot_claim_approval_or_evidence_provenance():
     assert audit.snapshot() == ()
 
 
-def test_binding_rejects_mismatched_digest_and_unrepresentable_multi_approval():
+def test_binding_rejects_mismatched_digest():
     proposal_id, digest, _, evidence_digest = upstream_digest()
-    for binding in (
-        upstream_binding(proposal_id, "c" * 64, ("approval1",), evidence_digest),
-        upstream_binding(proposal_id, digest, ("approval1", "approval2"), evidence_digest),
-    ):
-        try:
-            AuditedDelegatedSimulation(
-                grant(digest),
-                session_id="session1",
-                started_at=NOW,
-                audit_sink=AuditBuffer(max_entries=8),
-                audit_binding=binding,
-            )
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("invalid upstream audit binding must fail closed")
+    binding = upstream_binding(proposal_id, "c" * 64, ("approval1",), evidence_digest)
+    try:
+        AuditedDelegatedSimulation(
+            grant(digest),
+            session_id="session1",
+            started_at=NOW,
+            audit_sink=AuditBuffer(max_entries=8),
+            audit_binding=binding,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("mismatched upstream audit binding must fail closed")
+
+
+def test_multi_approval_identity_is_carried_without_approximation():
+    proposal_id, digest, _, evidence_digest = upstream_digest()
+    binding = upstream_binding(
+        proposal_id,
+        digest,
+        ("approval1", "approval2"),
+        evidence_digest,
+    )
+    exact = replace(
+        admission_event(evidence_digest),
+        approval_ref=None,
+        approval_refs=("approval1", "approval2"),
+    )
+    audit = AuditBuffer(max_entries=8)
+    simulation = AuditedDelegatedSimulation(
+        grant(digest),
+        session_id="session1",
+        started_at=NOW,
+        audit_sink=audit,
+        audit_binding=binding,
+    )
+    receipt = attempt(simulation, evidence_digest, audit_event=exact)
+    assert receipt.status == "verified_complete"
+    assert receipt.mocked_effects == 1
+    assert audit.snapshot() == (exact,)
+    assert exact.bound_approval_refs == ("approval1", "approval2")
+    assert exact.version == "3"
+
+    forged = replace(
+        exact,
+        event_id="effect-admission-2",
+        approval_refs=("approval2", "approval1"),
+    )
+    audit2 = AuditBuffer(max_entries=8)
+    simulation2 = AuditedDelegatedSimulation(
+        grant(digest),
+        session_id="session2",
+        started_at=NOW,
+        audit_sink=audit2,
+        audit_binding=binding,
+    )
+    blocked = attempt(simulation2, evidence_digest, audit_event=forged)
+    assert (blocked.status, blocked.reason) == ("denied", "audit_binding_mismatch")
+    assert blocked.mocked_effects == 0
+    assert audit2.snapshot() == ()

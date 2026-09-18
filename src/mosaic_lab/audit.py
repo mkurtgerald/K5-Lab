@@ -28,6 +28,7 @@ _ALLOWED_OUTCOMES = frozenset({
     "not_applicable",
 })
 _MAX_EVIDENCE_REFS = 128
+_MAX_APPROVAL_REFS = 4
 _MAX_AUDIT_ENTRIES = 4096
 
 
@@ -62,11 +63,12 @@ class AuditEvent:
     proposal_id: str | None = None
     grant_ref: str | None = None
     approval_ref: str | None = None
+    approval_refs: tuple[str, ...] = ()
     evidence_digests: tuple[str, ...] = ()
-    version: str = "2"
+    version: str = "3"
 
     def __post_init__(self) -> None:
-        if self.version != "2":
+        if self.version != "3":
             raise ValueError("unsupported audit version")
         for value in (
             self.event_id,
@@ -82,6 +84,16 @@ class AuditEvent:
         _optional_token(self.proposal_id, field="proposal_id")
         _optional_token(self.grant_ref, field="grant_ref")
         _optional_token(self.approval_ref, field="approval_ref")
+        if (
+            not isinstance(self.approval_refs, tuple)
+            or len(self.approval_refs) > _MAX_APPROVAL_REFS
+            or len(set(self.approval_refs)) != len(self.approval_refs)
+        ):
+            raise ValueError("invalid audit approval refs")
+        for value in self.approval_refs:
+            token(value)
+        if self.approval_ref is not None and self.approval_refs:
+            raise ValueError("ambiguous audit approval identity")
         if self.profile not in _ALLOWED_PROFILES:
             raise ValueError("unsupported audit profile")
         if self.decision not in _ALLOWED_DECISIONS:
@@ -99,6 +111,15 @@ class AuditEvent:
             raise ValueError("audit evidence digests must bind every evidence ref")
         for value in self.evidence_digests:
             _sha256_digest(value, field="audit evidence")
+
+    @property
+    def bound_approval_refs(self) -> tuple[str, ...]:
+        """Return the exact approval identity tuple carried by this event."""
+        if self.approval_refs:
+            return self.approval_refs
+        if self.approval_ref is not None:
+            return (self.approval_ref,)
+        return ()
 
 
 @dataclass(frozen=True)
