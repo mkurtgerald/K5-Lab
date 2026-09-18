@@ -1,13 +1,16 @@
 from datetime import datetime, timedelta, timezone
 import unittest
 
+from mosaic_lab.approvals import ApprovalRecord, ApprovalUseLedger
 from mosaic_lab.evidence_binding import (
     EvidenceContentBinding,
     bind_proposal_evidence,
 )
 from mosaic_lab.interaction import ProposalEnvelope
+from mosaic_lab.retrieval import RetrievalReceipt
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+STATE = "c" * 64
 
 
 def proposal(*, evidence_refs=("rec1",)):
@@ -30,6 +33,42 @@ def binding(record_id="rec1", *, digest="a" * 64, partition="p1", observed_at=No
         record_id=record_id,
         content_digest=digest,
         observed_at=observed_at or NOW - timedelta(seconds=5),
+    )
+
+
+def retrieval_receipt(*, digest="a" * 64, text="synthetic evidence", observed_at=None):
+    return RetrievalReceipt(
+        status="returned",
+        reason="evidence_returned",
+        request_id="read1",
+        partition="p1",
+        record_id="rec1",
+        text=text,
+        content_digest=digest,
+        observed_at=observed_at or NOW - timedelta(seconds=5),
+    )
+
+
+def binding_from_receipt(receipt):
+    return EvidenceContentBinding(
+        partition=receipt.partition,
+        record_id=receipt.record_id,
+        content_digest=receipt.content_digest,
+        observed_at=receipt.observed_at,
+    )
+
+
+def approval_record(proposal_digest):
+    return ApprovalRecord(
+        approval_id="approval1",
+        approver_ref="principal2",
+        partition="p1",
+        proposal_digest=proposal_digest,
+        policy_revision="policy1",
+        state_digest=STATE,
+        profile="delegated_simulation",
+        granted_at=NOW - timedelta(seconds=2),
+        expires_at=NOW + timedelta(seconds=30),
     )
 
 
@@ -93,6 +132,50 @@ class EvidenceContentBindingTests(unittest.TestCase):
             {"rec1": binding(observed_at=NOW - timedelta(seconds=4))},
         )
         self.assertNotEqual(first.bound_digest, second.bound_digest)
+
+    def test_retrieval_digest_is_consumed_by_approval_and_substitution_is_denied(self):
+        candidate = proposal()
+        returned = retrieval_receipt(digest="a" * 64)
+        original = bind_proposal_evidence(
+            candidate,
+            {"rec1": binding_from_receipt(returned)},
+        )
+        approval = approval_record(original.bound_digest)
+        accepted = ApprovalUseLedger().validate_and_consume(
+            (approval,),
+            partition="p1",
+            proposal_digest=original.bound_digest,
+            current_policy_revision="policy1",
+            current_state_digest=STATE,
+            current_profile="delegated_simulation",
+            now=NOW,
+        )
+        self.assertEqual((accepted.status, accepted.reason), ("accepted_for_simulation", "trusted_approval_bound"))
+        self.assertFalse(accepted.authorized)
+        self.assertFalse(accepted.execute)
+        self.assertEqual(accepted.external_actions, 0)
+
+        substituted = retrieval_receipt(digest="b" * 64)
+        rebound = bind_proposal_evidence(
+            candidate,
+            {"rec1": binding_from_receipt(substituted)},
+        )
+        self.assertEqual(original.base_proposal_digest, rebound.base_proposal_digest)
+        self.assertNotEqual(original.bound_digest, rebound.bound_digest)
+
+        denied = ApprovalUseLedger().validate_and_consume(
+            (approval,),
+            partition="p1",
+            proposal_digest=rebound.bound_digest,
+            current_policy_revision="policy1",
+            current_state_digest=STATE,
+            current_profile="delegated_simulation",
+            now=NOW,
+        )
+        self.assertEqual((denied.status, denied.reason), ("denied", "proposal_changed"))
+        self.assertFalse(denied.authorized)
+        self.assertFalse(denied.execute)
+        self.assertEqual(denied.external_actions, 0)
 
 
 if __name__ == "__main__":
