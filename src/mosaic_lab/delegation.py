@@ -135,7 +135,8 @@ class SimulationReceipt:
             if isinstance(v,bool) or not isinstance(v,int) or v<0: raise ValueError("receipt counters must be non-negative integers")
         if self.mocked_effects not in {0,1}: raise ValueError("receipt may record at most one mocked effect")
         if self.authorized is not False or self.execute is not False or self.external_actions!=0: raise ValueError("public simulation receipts cannot grant execution authority")
-        if not isinstance(self.rollback_available,bool) or self.version!="1": raise ValueError("invalid simulation receipt")
+        if self.rollback_available is not False: raise ValueError("public simulation receipts cannot claim rollback availability without trusted provenance")
+        if self.version!="1": raise ValueError("invalid simulation receipt")
 
 
 class DelegatedSimulation:
@@ -180,7 +181,7 @@ class DelegatedSimulation:
             if step.target_ref not in self._grant.allowed_targets:return self._receipt(status="denied",reason="target_out_of_scope",step=step,step_index=idx)
             cutoff=now-timedelta(seconds=60); self._effect_times=[x for x in self._effect_times if x>cutoff]
             if len(self._effect_times)>=self._grant.max_actions_per_minute:return self._receipt(status="rate_limited",reason="rate_budget",step=step,step_index=idx)
-            self._effect_times.append(now); self._step_effect_times[step.step_id]=now; self._step_reversible[step.step_id]=reversible; receipt=self._receipt(status=mocked_outcome,reason="mocked_effect_recorded",step=step,step_index=idx,mocked_effects=1,rollback_available=reversible and mocked_outcome=="verified_complete")
+            self._effect_times.append(now); self._step_effect_times[step.step_id]=now; self._step_reversible[step.step_id]=reversible; receipt=self._receipt(status=mocked_outcome,reason="mocked_effect_recorded",step=step,step_index=idx,mocked_effects=1,rollback_available=False)
             self._step_receipts[step.step_id]=receipt; c,f,u=self._counts(); receipt=replace(receipt,completed_steps=c,failed_steps=f,unknown_steps=u); self._step_receipts[step.step_id]=receipt; self._delivery_steps[step.delivery_id]=step; self._receipts[step.delivery_id]=receipt; return receipt
     def reconcile(self,step_id:str,*,authoritative_outcome:str,reversible:bool)->SimulationReceipt:
         token(step_id)
@@ -192,7 +193,7 @@ class DelegatedSimulation:
             original_reversible=self._step_reversible.get(step_id)
             if original_reversible is None or reversible!=original_reversible:
                 return replace(prior,status="reconciliation_required",reason="reversibility_mismatch",mocked_effects=0,rollback_available=False)
-            resolved=replace(prior,status=authoritative_outcome,reason="reconciled",mocked_effects=0,rollback_available=original_reversible and authoritative_outcome=="verified_complete"); self._step_receipts[step_id]=resolved
+            resolved=replace(prior,status=authoritative_outcome,reason="reconciled",mocked_effects=0,rollback_available=False); self._step_receipts[step_id]=resolved
             c,f,u=self._counts(); resolved=replace(resolved,completed_steps=c,failed_steps=f,unknown_steps=u); self._step_receipts[step_id]=resolved; self._receipts[resolved.delivery_id]=resolved; return resolved
 
 

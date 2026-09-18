@@ -7,6 +7,7 @@ from mosaic_lab.delegation import (
     DelegatedSimulation,
     DelegationGrant,
     ReconciliationBinding,
+    SimulationReceipt,
     SimulationStep,
 )
 
@@ -87,7 +88,7 @@ def test_reconciliation_cannot_promote_rollback_availability():
     assert resolved.external_actions == 0
 
 
-def test_reconciliation_preserves_original_positive_reversibility():
+def test_reconciliation_does_not_publish_unbound_positive_reversibility():
     sim = DelegatedSimulation(grant(), session_id="sess1", started_at=NOW)
     assert attempt(sim, reversible=True).status == "outcome_unknown"
 
@@ -98,7 +99,20 @@ def test_reconciliation_preserves_original_positive_reversibility():
 
     resolved = sim.reconcile("s1", authoritative_outcome="verified_complete", reversible=True)
     assert resolved.status == "verified_complete"
-    assert resolved.rollback_available is True
+    assert resolved.rollback_available is False
+
+
+def test_public_receipt_rejects_unbound_rollback_claim():
+    try:
+        SimulationReceipt(
+            status="verified_complete", reason="mocked_effect_recorded", session_id="sess1",
+            step_id="s1", delivery_id="d1", step_index=1, mocked_effects=1,
+            completed_steps=1, failed_steps=0, unknown_steps=0, rollback_available=True,
+        )
+    except ValueError as exc:
+        assert "rollback availability" in str(exc)
+    else:
+        raise AssertionError("public receipt accepted unbound rollback availability")
 
 
 def test_audited_reversibility_mismatch_does_not_admit_terminal_audit():
