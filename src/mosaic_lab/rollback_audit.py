@@ -317,8 +317,10 @@ class AuditedRollbackSimulation:
             )
             if status == "rollback_unknown":
                 self._unknown_results += 1
-                if len(self._recovered_results) < self._max_unknown_results:
-                    self._recovered_results[result_ref] = (result_digest, status, receipt)
+                if self._unknown_results > self._max_unknown_results:
+                    self._restart_audit_ambiguous = True
+                    return
+                self._recovered_results[result_ref] = (result_digest, status, receipt)
             else:
                 self._recovered_results[result_ref] = (result_digest, status, receipt)
                 definitive_seen = True
