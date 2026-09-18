@@ -87,6 +87,27 @@ class FailingAuditSink:
         return True
 
 
+class SnapshotFailingAuditSink:
+    """Synthetic adapter that fails on one selected history read."""
+
+    def __init__(self, *, fail_on_snapshot):
+        self._fail_on_snapshot = fail_on_snapshot
+        self._snapshot_calls = 0
+        self._append_calls = 0
+        self._events = []
+
+    def snapshot(self):
+        self._snapshot_calls += 1
+        if self._snapshot_calls == self._fail_on_snapshot:
+            raise OSError("synthetic audit history failure")
+        return tuple(self._events)
+
+    def append(self, event):
+        self._append_calls += 1
+        self._events.append(event)
+        return True
+
+
 def test_audit_precedes_exactly_one_mocked_rollback():
     item=cap(); sink=AuditBuffer(max_entries=8); sim=AuditedRollbackSimulation(item,assessment=assessment(item),audit_sink=sink)
     first=attempt(sim,item); same=attempt(sim,item)
@@ -123,6 +144,25 @@ def test_unexpected_reconciliation_audit_failure_remains_nonterminal():
     assert blocked.status=="reconciliation_required" and blocked.reason=="rollback_audit_unavailable"
     assert blocked.mocked_rollbacks==0 and blocked.external_actions==0
     assert sink.snapshot()==(attempt_event(item),)
+
+
+def test_restart_snapshot_failure_quarantines_rollback_history():
+    item=cap(); sink=SnapshotFailingAuditSink(fail_on_snapshot=1)
+    sim=AuditedRollbackSimulation(item,assessment=assessment(item),audit_sink=sink)
+    blocked=attempt(sim,item)
+    assert blocked.status=="reconciliation_required" and blocked.reason=="rollback_restart_audit_ambiguous"
+    assert blocked.mocked_rollbacks==0 and blocked.external_actions==0
+    assert sink._append_calls==0
+
+
+def test_pre_attempt_snapshot_failure_blocks_new_rollback_admission():
+    item=cap(); sink=SnapshotFailingAuditSink(fail_on_snapshot=2)
+    sim=AuditedRollbackSimulation(item,assessment=assessment(item),audit_sink=sink)
+    blocked=attempt(sim,item)
+    assert blocked.status=="reconciliation_required" and blocked.reason=="rollback_audit_unavailable"
+    assert blocked.mocked_rollbacks==0 and blocked.external_actions==0
+    assert sink._append_calls==0
+    assert sink.snapshot()==()
 
 
 def test_new_request_cannot_repeat_effect_after_attempt():

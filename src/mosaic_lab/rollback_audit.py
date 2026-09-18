@@ -232,7 +232,14 @@ class AuditedRollbackSimulation:
         """
         if self._audit_sink is None:
             return
-        events = self._audit_sink.snapshot()
+        try:
+            events = self._audit_sink.snapshot()
+        except Exception:
+            self._restart_audit_ambiguous = True
+            return
+        if not isinstance(events, tuple) or any(not isinstance(event, AuditEvent) for event in events):
+            self._restart_audit_ambiguous = True
+            return
         attempts: list[AuditEvent] = []
         has_result_event = False
         for event in events:
@@ -416,7 +423,12 @@ class AuditedRollbackSimulation:
                 return self._denied(request_id, "rollback_audit_binding_mismatch")
             if self._audit_sink is None:
                 return self._denied(request_id, "rollback_audit_unavailable")
-            prior_attempt = self._prior_attempt_audit(ignore_event_id=audit_event.event_id)
+            try:
+                prior_attempt = self._prior_attempt_audit(ignore_event_id=audit_event.event_id)
+            except Exception:
+                return self._receipt(
+                    request_id, "reconciliation_required", "rollback_audit_unavailable"
+                )
             if prior_attempt is not None:
                 self._attempted_at = utc(prior_attempt.recorded_at)
                 self._attempt = self._receipt(
