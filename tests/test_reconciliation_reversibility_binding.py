@@ -1,12 +1,20 @@
 from datetime import datetime, timedelta, timezone
 
 from mosaic_lab.audit import AuditBuffer, AuditEvent
-from mosaic_lab.delegation import AuditAdmissionBinding, AuditedDelegatedSimulation, DelegatedSimulation, DelegationGrant, SimulationStep
+from mosaic_lab.delegation import (
+    AuditAdmissionBinding,
+    AuditedDelegatedSimulation,
+    DelegatedSimulation,
+    DelegationGrant,
+    ReconciliationBinding,
+    SimulationStep,
+)
 
 NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
 ATTEMPT_TIME = NOW + timedelta(seconds=1)
 RECONCILE_TIME = NOW + timedelta(seconds=2)
 STATE = "a" * 64
+RESULT_DIGEST = "b" * 64
 
 
 def grant():
@@ -20,6 +28,13 @@ def grant():
 
 def binding():
     return AuditAdmissionBinding(proposal_id="prop1", proposal_digest=STATE)
+
+
+def reconciliation():
+    return ReconciliationBinding(
+        step_id="s1", delivery_id="d1", source_ref="source1", result_ref="result1",
+        result_digest=RESULT_DIGEST, authoritative_outcome="verified_complete", observed_at=RECONCILE_TIME,
+    )
 
 
 def attempt(sim, *, reversible):
@@ -42,7 +57,7 @@ def attempt(sim, *, reversible):
 
 def terminal():
     return AuditEvent(
-        event_id="term1", request_id="s1", partition="part1", principal_ref="p1",
+        event_id="result1", request_id="s1", partition="part1", principal_ref="p1",
         profile="delegated_simulation", policy_revision="pol1", model_revision="m1",
         tool_revision="t1", evidence_refs=(), decision="returned", reason="reconciled",
         outcome="verified_complete", recorded_at=RECONCILE_TIME, proposal_id="prop1", grant_ref="g1",
@@ -87,9 +102,10 @@ def test_audited_reversibility_mismatch_does_not_admit_terminal_audit():
     assert attempt(sim, reversible=False).status == "outcome_unknown"
     assert len(sink.snapshot()) == 1
 
+    trusted_result = reconciliation()
     blocked = sim.reconcile(
         "s1", authoritative_outcome="verified_complete", reversible=True,
-        audit_event=terminal(), now=RECONCILE_TIME,
+        reconciliation_binding=trusted_result, audit_event=terminal(), now=RECONCILE_TIME,
     )
     assert blocked.status == "reconciliation_required"
     assert blocked.reason == "reversibility_mismatch"
@@ -98,7 +114,7 @@ def test_audited_reversibility_mismatch_does_not_admit_terminal_audit():
 
     resolved = sim.reconcile(
         "s1", authoritative_outcome="verified_complete", reversible=False,
-        audit_event=terminal(), now=RECONCILE_TIME,
+        reconciliation_binding=trusted_result, audit_event=terminal(), now=RECONCILE_TIME,
     )
     assert resolved.status == "verified_complete"
     assert resolved.rollback_available is False
