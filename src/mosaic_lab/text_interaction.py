@@ -27,6 +27,10 @@ def _pos_float(value: object, maximum: float, field: str) -> None:
 def _text(value: object, maximum: int, field: str, *, empty: bool = False) -> str:
     if not isinstance(value, str) or (not empty and not value) or len(value) > maximum:
         raise ValueError(f"{field} outside bounded text limit")
+    try:
+        str.encode(value, "utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field} must be valid UTF-8 text") from exc
     if any(ord(c) < 32 and c not in "\n\t" for c in value):
         raise ValueError(f"{field} contains unsupported control characters")
     return value
