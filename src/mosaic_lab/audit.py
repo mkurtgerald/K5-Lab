@@ -71,10 +71,11 @@ class AuditEvent:
     reconciliation_result_ref: str | None = None
     reconciliation_result_digest: str | None = None
     reconciliation_observed_at: datetime | None = None
+    proposal_digest: str | None = None
     version: str = "4"
 
     def __post_init__(self) -> None:
-        if self.version != "4":
+        if self.version not in {"4", "5"}:
             raise ValueError("unsupported audit version")
         for value in (
             self.event_id,
@@ -90,6 +91,13 @@ class AuditEvent:
         _optional_token(self.proposal_id, field="proposal_id")
         _optional_token(self.grant_ref, field="grant_ref")
         _optional_token(self.approval_ref, field="approval_ref")
+        if self.version == "4":
+            if self.proposal_digest is not None:
+                raise ValueError("audit v4 cannot carry proposal digest")
+        else:
+            if self.proposal_id is None or self.proposal_digest is None:
+                raise ValueError("audit v5 requires proposal identity and digest")
+            _sha256_digest(self.proposal_digest, field="proposal digest")
         if (
             not isinstance(self.approval_refs, tuple)
             or len(self.approval_refs) > _MAX_APPROVAL_REFS
