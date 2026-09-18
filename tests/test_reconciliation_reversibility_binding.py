@@ -56,11 +56,18 @@ def attempt(sim, *, reversible):
 
 
 def terminal():
+    trusted = reconciliation()
     return AuditEvent(
         event_id="result1", request_id="s1", partition="part1", principal_ref="p1",
         profile="delegated_simulation", policy_revision="pol1", model_revision="m1",
         tool_revision="t1", evidence_refs=(), decision="returned", reason="reconciled",
         outcome="verified_complete", recorded_at=RECONCILE_TIME, proposal_id="prop1", grant_ref="g1",
+        reconciliation_binding_version=trusted.version,
+        reconciliation_delivery_id=trusted.delivery_id,
+        reconciliation_source_ref=trusted.source_ref,
+        reconciliation_result_ref=trusted.result_ref,
+        reconciliation_result_digest=trusted.result_digest,
+        reconciliation_observed_at=trusted.observed_at,
     )
 
 
