@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from mosaic_lab.audit import AuditBuffer, AuditEvent
-from mosaic_lab.delegation import AuditedDelegatedSimulation, DelegationGrant, SimulationStep
+from mosaic_lab.delegation import AuditAdmissionBinding, AuditedDelegatedSimulation, DelegationGrant, SimulationStep
 
 NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
 ATTEMPT_TIME = NOW + timedelta(seconds=1)
@@ -17,6 +17,10 @@ def grant():
         granted_at=NOW, expires_at=NOW + timedelta(minutes=5), max_steps=4,
         max_duration_seconds=60, max_actions_per_minute=4,
     )
+
+
+def binding():
+    return AuditAdmissionBinding(proposal_id="prop1", proposal_digest=STATE)
 
 
 def audit_event(*, event_id, decision, outcome, reason, recorded_at):
@@ -45,7 +49,7 @@ def terminal(event_id="term1", *, outcome="verified_complete", decision="returne
 
 def test_audited_reconciliation_records_terminal_outcome_before_resolution():
     sink=AuditBuffer(max_entries=4)
-    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink)
+    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
     first=ambiguous(sim)
     assert first.status=="outcome_unknown"
     resolved=sim.reconcile("s1",authoritative_outcome="verified_complete",reversible=False,audit_event=terminal(),now=RECONCILE_TIME)
@@ -68,7 +72,7 @@ def test_audited_reconciliation_records_terminal_outcome_before_resolution():
 
 def test_reconciliation_audit_failure_preserves_ambiguous_state():
     sink=AuditBuffer(max_entries=1)
-    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink)
+    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
     assert ambiguous(sim).status=="outcome_unknown"
     blocked=sim.reconcile("s1",authoritative_outcome="verified_complete",reversible=False,audit_event=terminal(),now=RECONCILE_TIME)
     assert blocked.status=="reconciliation_required"
@@ -87,7 +91,7 @@ def test_reconciliation_audit_failure_preserves_ambiguous_state():
 
 def test_forged_terminal_audit_cannot_resolve_unknown_outcome():
     sink=AuditBuffer(max_entries=4)
-    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink)
+    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
     assert ambiguous(sim).status=="outcome_unknown"
     blocked=sim.reconcile("s1",authoritative_outcome="verified_complete",reversible=False,audit_event=terminal(outcome="failed",decision="failed"),now=RECONCILE_TIME)
     assert blocked.status=="reconciliation_required"
@@ -97,7 +101,7 @@ def test_forged_terminal_audit_cannot_resolve_unknown_outcome():
 
 def test_concurrent_reconciliation_records_one_terminal_audit_event():
     sink=AuditBuffer(max_entries=8)
-    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink)
+    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
     assert ambiguous(sim).status=="outcome_unknown"
     with ThreadPoolExecutor(max_workers=4) as pool:
         results=list(pool.map(lambda i: sim.reconcile("s1",authoritative_outcome="verified_complete",reversible=False,audit_event=terminal(f"term{i}"),now=RECONCILE_TIME),range(4)))

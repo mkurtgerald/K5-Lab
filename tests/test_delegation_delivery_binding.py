@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 import unittest
 
 from mosaic_lab.audit import AuditBuffer, AuditEvent
-from mosaic_lab.delegation import AuditedDelegatedSimulation, DelegatedSimulation, DelegationGrant, SimulationStep
+from mosaic_lab.delegation import AuditAdmissionBinding, AuditedDelegatedSimulation, DelegatedSimulation, DelegationGrant, SimulationStep
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 PROPOSAL = "a" * 64
@@ -25,6 +25,10 @@ def grant():
         max_duration_seconds=90.0,
         max_actions_per_minute=4,
     )
+
+
+def binding():
+    return AuditAdmissionBinding(proposal_id="proposal1", proposal_digest=PROPOSAL)
 
 
 def kwargs():
@@ -83,7 +87,7 @@ class DeliveryBindingTests(unittest.TestCase):
     def test_audited_collision_is_denied_before_second_audit_admission(self):
         sink = AuditBuffer(max_entries=4)
         subject = AuditedDelegatedSimulation(
-            grant(), session_id="session1", started_at=NOW, audit_sink=sink
+            grant(), session_id="session1", started_at=NOW, audit_sink=sink, audit_binding=binding()
         )
         original = SimulationStep("step1", "delivery1", "act1", "target1")
         first = subject.attempt_step(original, audit_event=audit_event("event1", "step1"), **kwargs())

@@ -177,20 +177,17 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
     Audit admission is not claimed to be durable/tamper-evident here; a private
     production adapter must provide that property. Absence or failure fails closed.
     """
-    def __init__(self,grant:DelegationGrant,*,session_id:str,started_at:datetime,audit_sink:AuditBuffer|None,audit_binding:AuditAdmissionBinding|None=None,max_tracked_deliveries:int=256)->None:
+    def __init__(self,grant:DelegationGrant,*,session_id:str,started_at:datetime,audit_sink:AuditBuffer|None,audit_binding:AuditAdmissionBinding,max_tracked_deliveries:int=256)->None:
         super().__init__(grant,session_id=session_id,started_at=started_at,max_tracked_deliveries=max_tracked_deliveries)
-        if audit_binding is not None:
-            if not isinstance(audit_binding, AuditAdmissionBinding):
-                raise ValueError("trusted audit binding required")
-            if audit_binding.proposal_digest != grant.proposal_digest:
-                raise ValueError("audit proposal digest mismatch")
+        if not isinstance(audit_binding, AuditAdmissionBinding):
+            raise ValueError("trusted audit binding required")
+        if audit_binding.proposal_digest != grant.proposal_digest:
+            raise ValueError("audit proposal digest mismatch")
         self._audit_sink=audit_sink
         self._audit_binding=audit_binding
         self._audit_gate=Lock()
 
     def _audit_event_matches_upstream(self, audit_event: AuditEvent) -> bool:
-        if self._audit_binding is None:
-            return not audit_event.bound_approval_refs and not audit_event.evidence_refs and not audit_event.evidence_digests
         return (
             audit_event.proposal_id == self._audit_binding.proposal_id
             and audit_event.bound_approval_refs == self._audit_binding.approval_refs

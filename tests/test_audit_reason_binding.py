@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from mosaic_lab.audit import AuditBuffer, AuditEvent
-from mosaic_lab.delegation import AuditedDelegatedSimulation, DelegationGrant, SimulationStep
+from mosaic_lab.delegation import AuditAdmissionBinding, AuditedDelegatedSimulation, DelegationGrant, SimulationStep
 
 NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
 STATE = "a" * 64
@@ -25,6 +25,10 @@ def grant():
     )
 
 
+def binding():
+    return AuditAdmissionBinding(proposal_id="prop1", proposal_digest=STATE)
+
+
 def test_attempt_audit_reason_is_semantically_bound_before_effect():
     sink = AuditBuffer(max_entries=4)
     sim = AuditedDelegatedSimulation(
@@ -32,6 +36,7 @@ def test_attempt_audit_reason_is_semantically_bound_before_effect():
         session_id="sess1",
         started_at=NOW,
         audit_sink=sink,
+        audit_binding=binding(),
     )
     forged = AuditEvent(
         event_id="e1",

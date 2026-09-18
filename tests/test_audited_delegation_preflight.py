@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from mosaic_lab.audit import AuditBuffer, AuditEvent
-from mosaic_lab.delegation import AuditedDelegatedSimulation, DelegationGrant, SimulationStep
+from mosaic_lab.delegation import AuditAdmissionBinding, AuditedDelegatedSimulation, DelegationGrant, SimulationStep
 
 NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
 STATE = "a" * 64
@@ -24,6 +24,10 @@ def grant():
         max_duration_seconds=60,
         max_actions_per_minute=4,
     )
+
+
+def binding():
+    return AuditAdmissionBinding(proposal_id="prop1", proposal_digest=STATE)
 
 
 def event():
@@ -65,7 +69,9 @@ def attempt(sim, **overrides):
 
 def test_state_change_is_denied_before_attempt_audit_is_recorded():
     sink = AuditBuffer(max_entries=4)
-    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+    sim = AuditedDelegatedSimulation(
+        grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+    )
     receipt = attempt(sim, current_state_digest=OTHER_STATE)
     assert receipt.status == "denied"
     assert receipt.reason == "state_changed"
@@ -76,7 +82,9 @@ def test_state_change_is_denied_before_attempt_audit_is_recorded():
 
 def test_policy_change_is_denied_before_attempt_audit_is_recorded():
     sink = AuditBuffer(max_entries=4)
-    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+    sim = AuditedDelegatedSimulation(
+        grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+    )
     receipt = attempt(sim, current_policy_revision="pol2")
     assert receipt.status == "denied"
     assert receipt.reason == "policy_changed"
@@ -91,7 +99,9 @@ def test_cancelled_or_revoked_step_never_records_attempt_audit():
         ({"grant_revoked": True}, "denied", "grant_revoked"),
     ):
         sink = AuditBuffer(max_entries=4)
-        sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+        sim = AuditedDelegatedSimulation(
+            grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+        )
         receipt = attempt(sim, **overrides)
         assert receipt.status == expected_status
         assert receipt.reason == expected_reason
@@ -102,7 +112,9 @@ def test_cancelled_or_revoked_step_never_records_attempt_audit():
 
 def test_out_of_scope_step_never_records_attempt_audit():
     sink = AuditBuffer(max_entries=4)
-    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+    sim = AuditedDelegatedSimulation(
+        grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+    )
     receipt = sim.attempt_step(
         SimulationStep("s1", "d1", "other", "t1"),
         now=NOW,

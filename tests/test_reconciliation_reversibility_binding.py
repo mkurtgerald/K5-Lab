@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from mosaic_lab.audit import AuditBuffer, AuditEvent
-from mosaic_lab.delegation import AuditedDelegatedSimulation, DelegatedSimulation, DelegationGrant, SimulationStep
+from mosaic_lab.delegation import AuditAdmissionBinding, AuditedDelegatedSimulation, DelegatedSimulation, DelegationGrant, SimulationStep
 
 NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
 ATTEMPT_TIME = NOW + timedelta(seconds=1)
@@ -16,6 +16,10 @@ def grant():
         granted_at=NOW, expires_at=NOW + timedelta(minutes=5), max_steps=4,
         max_duration_seconds=60, max_actions_per_minute=4,
     )
+
+
+def binding():
+    return AuditAdmissionBinding(proposal_id="prop1", proposal_digest=STATE)
 
 
 def attempt(sim, *, reversible):
@@ -77,7 +81,9 @@ def test_reconciliation_preserves_original_positive_reversibility():
 
 def test_audited_reversibility_mismatch_does_not_admit_terminal_audit():
     sink = AuditBuffer(max_entries=4)
-    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+    sim = AuditedDelegatedSimulation(
+        grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+    )
     assert attempt(sim, reversible=False).status == "outcome_unknown"
     assert len(sink.snapshot()) == 1
 

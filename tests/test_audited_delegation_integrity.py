@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from mosaic_lab.audit import AuditBuffer, AuditEvent
-from mosaic_lab.delegation import AuditedDelegatedSimulation, DelegationGrant, SimulationStep
+from mosaic_lab.delegation import AuditAdmissionBinding, AuditedDelegatedSimulation, DelegationGrant, SimulationStep
 
 NOW = datetime(2026, 9, 17, 12, 0, tzinfo=timezone.utc)
 DIGEST = "a" * 64
@@ -16,6 +16,10 @@ def grant():
         granted_at=NOW, expires_at=NOW + timedelta(minutes=5),
         max_steps=4, max_duration_seconds=60, max_actions_per_minute=4,
     )
+
+
+def binding():
+    return AuditAdmissionBinding(proposal_id="prop1", proposal_digest=DIGEST)
 
 
 def event(*, event_id="e1", outcome="attempted", recorded_at=NOW):
@@ -40,7 +44,9 @@ def attempt(sim, audit_event):
 
 def test_audit_cannot_preclaim_terminal_outcome_before_effect():
     sink = AuditBuffer(max_entries=4)
-    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+    sim = AuditedDelegatedSimulation(
+        grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+    )
     receipt = attempt(sim, event(outcome="verified_complete"))
     assert receipt.status == "denied"
     assert receipt.reason == "audit_binding_mismatch"
@@ -52,7 +58,9 @@ def test_audit_cannot_preclaim_terminal_outcome_before_effect():
 def test_audit_timestamp_must_bind_to_effect_boundary_time():
     for recorded_at in (NOW - timedelta(seconds=1), NOW + timedelta(seconds=1)):
         sink = AuditBuffer(max_entries=4)
-        sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+        sim = AuditedDelegatedSimulation(
+            grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+        )
         receipt = attempt(sim, event(recorded_at=recorded_at))
         assert receipt.status == "denied"
         assert receipt.reason == "audit_binding_mismatch"
@@ -63,7 +71,9 @@ def test_audit_timestamp_must_bind_to_effect_boundary_time():
 
 def test_concurrent_duplicate_delivery_records_one_audit_admission():
     sink = AuditBuffer(max_entries=16)
-    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+    sim = AuditedDelegatedSimulation(
+        grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+    )
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         receipts = list(pool.map(lambda i: attempt(sim, event(event_id=f"e{i}")), range(8)))
@@ -82,7 +92,9 @@ class TimeoutAuditBuffer(AuditBuffer):
 
 def test_unexpected_audit_sink_failure_fails_closed():
     sink = TimeoutAuditBuffer(max_entries=4)
-    sim = AuditedDelegatedSimulation(grant(), session_id="sess1", started_at=NOW, audit_sink=sink)
+    sim = AuditedDelegatedSimulation(
+        grant(), session_id="sess1", started_at=NOW, audit_sink=sink, audit_binding=binding()
+    )
     receipt = attempt(sim, event())
     assert receipt.status == "denied"
     assert receipt.reason == "audit_admission_failed"
