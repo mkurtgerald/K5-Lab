@@ -433,7 +433,7 @@ class AuditedRollbackSimulation:
                 )
             try:
                 admitted = self._audit_sink.append(audit_event)
-            except (RuntimeError, ValueError):
+            except Exception:
                 return self._denied(request_id, "rollback_audit_unavailable")
             if admitted is not True:
                 return self._denied(request_id, "rollback_audit_replay_ambiguous")
@@ -532,7 +532,7 @@ class AuditedRollbackSimulation:
                 return self._receipt(request_id, "reconciliation_required", "rollback_audit_unavailable")
             try:
                 admitted = self._audit_sink.append(audit_event)
-            except (RuntimeError, ValueError):
+            except Exception:
                 return self._receipt(request_id, "reconciliation_required", "rollback_audit_unavailable")
             if admitted is not True:
                 return self._receipt(

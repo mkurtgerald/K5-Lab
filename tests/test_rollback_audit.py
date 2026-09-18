@@ -68,6 +68,25 @@ def attempt(sim, item, event=None):
     )
 
 
+class FailingAuditSink:
+    """Synthetic adapter that fails on one selected append call."""
+
+    def __init__(self, *, fail_on_append):
+        self._fail_on_append = fail_on_append
+        self._append_calls = 0
+        self._events = []
+
+    def snapshot(self):
+        return tuple(self._events)
+
+    def append(self, event):
+        self._append_calls += 1
+        if self._append_calls == self._fail_on_append:
+            raise OSError("synthetic audit sink failure")
+        self._events.append(event)
+        return True
+
+
 def test_audit_precedes_exactly_one_mocked_rollback():
     item=cap(); sink=AuditBuffer(max_entries=8); sim=AuditedRollbackSimulation(item,assessment=assessment(item),audit_sink=sink)
     first=attempt(sim,item); same=attempt(sim,item)
@@ -84,6 +103,26 @@ def test_missing_forged_or_preseeded_audit_fails_closed_before_effect():
     seeded=AuditBuffer(max_entries=8); event=attempt_event(item); assert seeded.append(event) is True
     sim=AuditedRollbackSimulation(item,assessment=assessment(item),audit_sink=seeded)
     replay=attempt(sim,item,event); assert replay.reason=="rollback_audit_replay_ambiguous" and replay.mocked_rollbacks==0
+
+
+def test_unexpected_audit_append_failure_denies_before_mocked_rollback():
+    item=cap(); sink=FailingAuditSink(fail_on_append=1)
+    sim=AuditedRollbackSimulation(item,assessment=assessment(item),audit_sink=sink)
+    blocked=attempt(sim,item)
+    assert (blocked.status,blocked.reason,blocked.mocked_rollbacks)==("denied","rollback_audit_unavailable",0)
+    assert blocked.authorized is False and blocked.execute is False and blocked.external_actions==0
+    assert sink.snapshot()==()
+
+
+def test_unexpected_reconciliation_audit_failure_remains_nonterminal():
+    item=cap(); sink=FailingAuditSink(fail_on_append=2)
+    sim=AuditedRollbackSimulation(item,assessment=assessment(item),audit_sink=sink)
+    assert attempt(sim,item).status=="attempted"
+    rb=result()
+    blocked=sim.reconcile(rb,request_id="req1",now=NOW+timedelta(seconds=4),audit_event=result_event(item,rb))
+    assert blocked.status=="reconciliation_required" and blocked.reason=="rollback_audit_unavailable"
+    assert blocked.mocked_rollbacks==0 and blocked.external_actions==0
+    assert sink.snapshot()==(attempt_event(item),)
 
 
 def test_new_request_cannot_repeat_effect_after_attempt():
