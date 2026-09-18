@@ -302,7 +302,7 @@ def test_multi_approval_identity_is_carried_without_approximation():
     assert receipt.mocked_effects == 1
     assert audit.snapshot() == (exact,)
     assert exact.bound_approval_refs == ("approval1", "approval2")
-    assert exact.version == "3"
+    assert exact.version == "4"
 
     forged = replace(
         exact,
