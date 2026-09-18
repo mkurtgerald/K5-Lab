@@ -7,6 +7,7 @@ from mosaic_lab.retrieval import ReadScope
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 EVIDENCE_DIGEST = "d" * 64
+RESULT_DIGEST = "e" * 64
 
 
 def scope(**changes):
@@ -60,7 +61,7 @@ class AuditContractTests(unittest.TestCase):
         self.assertEqual(item.approval_ref, "approval1")
         self.assertEqual(item.bound_approval_refs, ("approval1",))
         self.assertEqual(item.outcome, "denied")
-        self.assertEqual(item.version, "3")
+        self.assertEqual(item.version, "4")
         self.assertFalse(hasattr(item, "reasoning"))
         self.assertFalse(hasattr(item, "details"))
 
@@ -78,6 +79,59 @@ class AuditContractTests(unittest.TestCase):
             event(
                 approval_ref=None,
                 approval_refs=("approval1", "approval2", "approval3", "approval4", "approval5"),
+            )
+
+    def test_reconciliation_provenance_is_complete_and_reason_scoped(self):
+        reconciled = event(
+            event_id="result1",
+            request_id="step1",
+            profile="delegated_simulation",
+            decision="returned",
+            reason="reconciled",
+            outcome="verified_complete",
+            reconciliation_binding_version="1",
+            reconciliation_delivery_id="delivery1",
+            reconciliation_source_ref="source1",
+            reconciliation_result_ref="result1",
+            reconciliation_result_digest=RESULT_DIGEST,
+            reconciliation_observed_at=NOW - timedelta(seconds=1),
+        )
+        self.assertEqual(reconciled.reconciliation_source_ref, "source1")
+        self.assertEqual(reconciled.reconciliation_result_digest, RESULT_DIGEST)
+        with self.assertRaises(ValueError):
+            event(
+                event_id="result2",
+                request_id="step2",
+                profile="delegated_simulation",
+                decision="returned",
+                reason="reconciled",
+                outcome="verified_complete",
+            )
+        with self.assertRaises(ValueError):
+            event(reconciliation_delivery_id="delivery1")
+        with self.assertRaises(ValueError):
+            event(
+                reconciliation_binding_version="1",
+                reconciliation_delivery_id="delivery1",
+                reconciliation_source_ref="source1",
+                reconciliation_result_ref="result1",
+                reconciliation_result_digest=RESULT_DIGEST,
+                reconciliation_observed_at=NOW,
+            )
+        with self.assertRaises(ValueError):
+            event(
+                event_id="result3",
+                request_id="step3",
+                profile="delegated_simulation",
+                decision="returned",
+                reason="reconciled",
+                outcome="verified_complete",
+                reconciliation_binding_version="1",
+                reconciliation_delivery_id="delivery1",
+                reconciliation_source_ref="source1",
+                reconciliation_result_ref="result3",
+                reconciliation_result_digest="not-a-digest",
+                reconciliation_observed_at=NOW,
             )
 
     def test_denial_cancellation_revocation_failure_and_unknown_outcomes_are_representable(self):
@@ -157,7 +211,7 @@ class AuditContractTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             event(evidence_digests=("not-a-digest",))
         with self.assertRaises(ValueError):
-            event(version="2")
+            event(version="3")
         with self.assertRaises(ValueError):
             AuditBuffer(max_entries=0)
 

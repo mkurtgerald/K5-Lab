@@ -341,7 +341,27 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
                 if self._audit_sink is None:
                     return replace(prior,status="reconciliation_required",reason="audit_unavailable",mocked_effects=0,rollback_available=False)
                 expected_decision="returned" if authoritative_outcome=="verified_complete" else "failed"
-                if not isinstance(audit_event,AuditEvent) or not self._audit_event_matches_upstream(audit_event) or audit_event.event_id!=reconciliation_binding.result_ref or audit_event.request_id!=step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=self._grant.policy_revision or audit_event.profile!=self._grant.profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!=expected_decision or audit_event.reason!="reconciled" or audit_event.outcome!=authoritative_outcome or utc(audit_event.recorded_at)!=audit_now:
+                if (
+                    not isinstance(audit_event,AuditEvent)
+                    or not self._audit_event_matches_upstream(audit_event)
+                    or audit_event.event_id!=reconciliation_binding.result_ref
+                    or audit_event.request_id!=step_id
+                    or audit_event.partition!=self._grant.partition
+                    or audit_event.principal_ref!=self._grant.principal_ref
+                    or audit_event.policy_revision!=self._grant.policy_revision
+                    or audit_event.profile!=self._grant.profile
+                    or audit_event.grant_ref!=self._grant.grant_id
+                    or audit_event.decision!=expected_decision
+                    or audit_event.reason!="reconciled"
+                    or audit_event.outcome!=authoritative_outcome
+                    or utc(audit_event.recorded_at)!=audit_now
+                    or audit_event.reconciliation_binding_version!=reconciliation_binding.version
+                    or audit_event.reconciliation_delivery_id!=reconciliation_binding.delivery_id
+                    or audit_event.reconciliation_source_ref!=reconciliation_binding.source_ref
+                    or audit_event.reconciliation_result_ref!=reconciliation_binding.result_ref
+                    or audit_event.reconciliation_result_digest!=reconciliation_binding.result_digest
+                    or utc(audit_event.reconciliation_observed_at)!=observed_at
+                ):
                     return replace(prior,status="reconciliation_required",reason="audit_binding_mismatch",mocked_effects=0,rollback_available=False)
                 try:
                     self._audit_sink.append(audit_event)

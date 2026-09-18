@@ -30,25 +30,36 @@ def binding():
     return AuditAdmissionBinding(proposal_id="prop1", proposal_digest=STATE)
 
 
-def reconciliation(*, outcome="verified_complete", step_id="s1", delivery_id="d1", result_ref="result1"):
+def reconciliation(
+    *,
+    outcome="verified_complete",
+    step_id="s1",
+    delivery_id="d1",
+    source_ref="source1",
+    result_ref="result1",
+    result_digest=RESULT_DIGEST,
+    observed_at=RECONCILE_TIME,
+):
     return ReconciliationBinding(
         step_id=step_id,
         delivery_id=delivery_id,
-        source_ref="source1",
+        source_ref=source_ref,
         result_ref=result_ref,
-        result_digest=RESULT_DIGEST,
+        result_digest=result_digest,
         authoritative_outcome=outcome,
-        observed_at=RECONCILE_TIME,
+        observed_at=observed_at,
     )
 
 
-def audit_event(*, event_id, decision, outcome, reason, recorded_at):
-    return AuditEvent(
+def audit_event(*, event_id, decision, outcome, reason, recorded_at, **changes):
+    values = dict(
         event_id=event_id, request_id="s1", partition="part1", principal_ref="p1",
         profile="delegated_simulation", policy_revision="pol1", model_revision="m1",
         tool_revision="t1", evidence_refs=(), decision=decision, reason=reason,
         outcome=outcome, recorded_at=recorded_at, proposal_id="prop1", grant_ref="g1",
     )
+    values.update(changes)
+    return AuditEvent(**values)
 
 
 def ambiguous(sim):
@@ -62,8 +73,28 @@ def ambiguous(sim):
     )
 
 
-def terminal(event_id="result1", *, outcome="verified_complete", decision="returned", reason="reconciled"):
-    return audit_event(event_id=event_id, decision=decision, outcome=outcome, reason=reason, recorded_at=RECONCILE_TIME)
+def terminal(
+    event_id="result1",
+    *,
+    outcome="verified_complete",
+    decision="returned",
+    reason="reconciled",
+    provenance=None,
+):
+    trusted = provenance or reconciliation()
+    return audit_event(
+        event_id=event_id,
+        decision=decision,
+        outcome=outcome,
+        reason=reason,
+        recorded_at=RECONCILE_TIME,
+        reconciliation_binding_version=trusted.version,
+        reconciliation_delivery_id=trusted.delivery_id,
+        reconciliation_source_ref=trusted.source_ref,
+        reconciliation_result_ref=trusted.result_ref,
+        reconciliation_result_digest=trusted.result_digest,
+        reconciliation_observed_at=trusted.observed_at,
+    )
 
 
 def test_audited_reconciliation_records_terminal_outcome_before_resolution():
@@ -71,9 +102,10 @@ def test_audited_reconciliation_records_terminal_outcome_before_resolution():
     sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
     first=ambiguous(sim)
     assert first.status=="outcome_unknown"
+    trusted_result=reconciliation()
     resolved=sim.reconcile(
         "s1",authoritative_outcome="verified_complete",reversible=False,
-        reconciliation_binding=reconciliation(),audit_event=terminal(),now=RECONCILE_TIME,
+        reconciliation_binding=trusted_result,audit_event=terminal(provenance=trusted_result),now=RECONCILE_TIME,
     )
     assert resolved.status=="verified_complete"
     assert resolved.reason=="reconciled"
@@ -83,6 +115,12 @@ def test_audited_reconciliation_records_terminal_outcome_before_resolution():
     assert len(events)==2
     assert events[-1].event_id=="result1"
     assert events[-1].outcome=="verified_complete"
+    assert events[-1].reconciliation_binding_version=="1"
+    assert events[-1].reconciliation_delivery_id=="d1"
+    assert events[-1].reconciliation_source_ref=="source1"
+    assert events[-1].reconciliation_result_ref=="result1"
+    assert events[-1].reconciliation_result_digest==RESULT_DIGEST
+    assert events[-1].reconciliation_observed_at==RECONCILE_TIME
     replay=sim.attempt_step(
         SimulationStep("s1","d1","a1","t1"),now=RECONCILE_TIME,
         current_policy_revision="pol1",current_state_digest=STATE,current_profile="delegated_simulation",
@@ -126,13 +164,47 @@ def test_reconciliation_binding_must_match_exact_step_delivery_and_outcome():
         assert len(sink.snapshot())==1
 
 
+def test_terminal_audit_must_persist_exact_reconciliation_provenance():
+    sink=AuditBuffer(max_entries=8)
+    sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
+    assert ambiguous(sim).status=="outcome_unknown"
+    trusted=reconciliation()
+    forged_events = (
+        terminal(provenance=reconciliation(delivery_id="other")),
+        terminal(provenance=reconciliation(source_ref="other")),
+        terminal(provenance=reconciliation(result_ref="other")),
+        terminal(provenance=reconciliation(result_digest="c" * 64)),
+        terminal(provenance=reconciliation(observed_at=ATTEMPT_TIME)),
+        audit_event(
+            event_id="result1", decision="returned", outcome="verified_complete", reason="reconciled",
+            recorded_at=RECONCILE_TIME,
+            reconciliation_binding_version="2",
+            reconciliation_delivery_id=trusted.delivery_id,
+            reconciliation_source_ref=trusted.source_ref,
+            reconciliation_result_ref=trusted.result_ref,
+            reconciliation_result_digest=trusted.result_digest,
+            reconciliation_observed_at=trusted.observed_at,
+        ),
+    )
+    for forged_event in forged_events:
+        blocked=sim.reconcile(
+            "s1",authoritative_outcome="verified_complete",reversible=False,
+            reconciliation_binding=trusted,audit_event=forged_event,now=RECONCILE_TIME,
+        )
+        assert blocked.status=="reconciliation_required"
+        assert blocked.reason=="audit_binding_mismatch"
+        assert blocked.mocked_effects==0
+        assert len(sink.snapshot())==1
+
+
 def test_reconciliation_audit_failure_preserves_ambiguous_state():
     sink=AuditBuffer(max_entries=1)
     sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
     assert ambiguous(sim).status=="outcome_unknown"
+    trusted_result=reconciliation()
     blocked=sim.reconcile(
         "s1",authoritative_outcome="verified_complete",reversible=False,
-        reconciliation_binding=reconciliation(),audit_event=terminal(),now=RECONCILE_TIME,
+        reconciliation_binding=trusted_result,audit_event=terminal(provenance=trusted_result),now=RECONCILE_TIME,
     )
     assert blocked.status=="reconciliation_required"
     assert blocked.reason=="audit_admission_failed"
@@ -152,9 +224,10 @@ def test_forged_terminal_audit_cannot_resolve_unknown_outcome():
     sink=AuditBuffer(max_entries=4)
     sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
     assert ambiguous(sim).status=="outcome_unknown"
+    trusted_result=reconciliation()
     blocked=sim.reconcile(
         "s1",authoritative_outcome="verified_complete",reversible=False,
-        reconciliation_binding=reconciliation(),audit_event=terminal(outcome="failed",decision="failed"),now=RECONCILE_TIME,
+        reconciliation_binding=trusted_result,audit_event=terminal(outcome="failed",decision="failed",provenance=trusted_result),now=RECONCILE_TIME,
     )
     assert blocked.status=="reconciliation_required"
     assert blocked.reason=="audit_binding_mismatch"
@@ -165,9 +238,10 @@ def test_terminal_audit_identity_must_equal_reconciliation_result_identity():
     sink=AuditBuffer(max_entries=4)
     sim=AuditedDelegatedSimulation(grant(),session_id="sess1",started_at=NOW,audit_sink=sink,audit_binding=binding())
     assert ambiguous(sim).status=="outcome_unknown"
+    trusted_result=reconciliation()
     blocked=sim.reconcile(
         "s1",authoritative_outcome="verified_complete",reversible=False,
-        reconciliation_binding=reconciliation(),audit_event=terminal("other"),now=RECONCILE_TIME,
+        reconciliation_binding=trusted_result,audit_event=terminal("other",provenance=trusted_result),now=RECONCILE_TIME,
     )
     assert blocked.status=="reconciliation_required"
     assert blocked.reason=="audit_binding_mismatch"
@@ -182,7 +256,7 @@ def test_concurrent_reconciliation_records_one_terminal_audit_event():
     with ThreadPoolExecutor(max_workers=4) as pool:
         results=list(pool.map(lambda _: sim.reconcile(
             "s1",authoritative_outcome="verified_complete",reversible=False,
-            reconciliation_binding=trusted_result,audit_event=terminal(),now=RECONCILE_TIME,
+            reconciliation_binding=trusted_result,audit_event=terminal(provenance=trusted_result),now=RECONCILE_TIME,
         ),range(4)))
     assert all(item.status=="verified_complete" for item in results)
     assert len(sink.snapshot())==2

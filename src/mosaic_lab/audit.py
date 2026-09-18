@@ -65,10 +65,16 @@ class AuditEvent:
     approval_ref: str | None = None
     approval_refs: tuple[str, ...] = ()
     evidence_digests: tuple[str, ...] = ()
-    version: str = "3"
+    reconciliation_binding_version: str | None = None
+    reconciliation_delivery_id: str | None = None
+    reconciliation_source_ref: str | None = None
+    reconciliation_result_ref: str | None = None
+    reconciliation_result_digest: str | None = None
+    reconciliation_observed_at: datetime | None = None
+    version: str = "4"
 
     def __post_init__(self) -> None:
-        if self.version != "3":
+        if self.version != "4":
             raise ValueError("unsupported audit version")
         for value in (
             self.event_id,
@@ -111,6 +117,30 @@ class AuditEvent:
             raise ValueError("audit evidence digests must bind every evidence ref")
         for value in self.evidence_digests:
             _sha256_digest(value, field="audit evidence")
+
+        reconciliation_values = (
+            self.reconciliation_binding_version,
+            self.reconciliation_delivery_id,
+            self.reconciliation_source_ref,
+            self.reconciliation_result_ref,
+            self.reconciliation_result_digest,
+            self.reconciliation_observed_at,
+        )
+        has_reconciliation = any(value is not None for value in reconciliation_values)
+        has_complete_reconciliation = all(value is not None for value in reconciliation_values)
+        if has_reconciliation and not has_complete_reconciliation:
+            raise ValueError("partial reconciliation provenance")
+        if self.reason == "reconciled" and not has_complete_reconciliation:
+            raise ValueError("reconciled audit requires provenance")
+        if self.reason != "reconciled" and has_reconciliation:
+            raise ValueError("reconciliation provenance only valid for reconciled audit")
+        if has_complete_reconciliation:
+            token(self.reconciliation_binding_version)
+            token(self.reconciliation_delivery_id)
+            token(self.reconciliation_source_ref)
+            token(self.reconciliation_result_ref)
+            _sha256_digest(self.reconciliation_result_digest, field="reconciliation result")
+            utc(self.reconciliation_observed_at)
 
     @property
     def bound_approval_refs(self) -> tuple[str, ...]:
