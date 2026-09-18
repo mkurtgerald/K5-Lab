@@ -256,6 +256,7 @@ class InteractionSession:
         self._calls = 0
         self._tokens = 0
         self._elapsed = 0.0
+        self._integrity_failed = False
         self._lock = RLock()
 
     @property
@@ -286,6 +287,95 @@ def _bytes(message: ProviderMessage) -> int:
     return len(message.text.encode()) + len(message.action_status.encode()) + sum(len(v.encode()) for v in message.evidence_refs)
 
 
+def _clone_message(message: ProviderMessage) -> ProviderMessage:
+    return ProviderMessage(message.role, message.text, tuple(message.evidence_refs), message.action_status)
+
+
+def _clone_turn(turn: Turn) -> Turn:
+    return Turn(turn.request_id, _clone_message(turn.user), _clone_message(turn.assistant), turn.charged_tokens)
+
+
+def _clone_limits(limits: InteractionLimits) -> InteractionLimits:
+    return InteractionLimits(
+        max_context_messages=limits.max_context_messages,
+        max_context_chars=limits.max_context_chars,
+        max_turn_chars=limits.max_turn_chars,
+        max_output_chars=limits.max_output_chars,
+        max_calls=limits.max_calls,
+        max_total_tokens=limits.max_total_tokens,
+        max_output_tokens=limits.max_output_tokens,
+        max_total_seconds=limits.max_total_seconds,
+        per_call_timeout_seconds=limits.per_call_timeout_seconds,
+    )
+
+
+@dataclass(frozen=True)
+class _SessionSnapshot:
+    partition: str
+    session_id: str
+    limits: InteractionLimits
+    turns: tuple[Turn, ...]
+    attempted: frozenset[str]
+    calls: int
+    tokens: int
+    elapsed: float
+    integrity_failed: bool
+    lock: object
+
+
+def _snapshot_session(session: InteractionSession) -> _SessionSnapshot:
+    return _SessionSnapshot(
+        partition=session.partition,
+        session_id=session.session_id,
+        limits=_clone_limits(session.limits),
+        turns=tuple(_clone_turn(turn) for turn in session._turns),
+        attempted=frozenset(session._attempted),
+        calls=session._calls,
+        tokens=session._tokens,
+        elapsed=session._elapsed,
+        integrity_failed=session._integrity_failed,
+        lock=session._lock,
+    )
+
+
+def _session_matches_snapshot(session: InteractionSession, snapshot: _SessionSnapshot) -> bool:
+    try:
+        return (
+            session.partition == snapshot.partition
+            and session.session_id == snapshot.session_id
+            and type(session.limits) is InteractionLimits
+            and session.limits == snapshot.limits
+            and type(session._turns) is list
+            and tuple(session._turns) == snapshot.turns
+            and type(session._attempted) is set
+            and frozenset(session._attempted) == snapshot.attempted
+            and type(session._calls) is int
+            and session._calls == snapshot.calls
+            and type(session._tokens) is int
+            and session._tokens == snapshot.tokens
+            and type(session._elapsed) in {int, float}
+            and float(session._elapsed) == snapshot.elapsed
+            and type(session._integrity_failed) is bool
+            and session._integrity_failed is snapshot.integrity_failed
+            and session._lock is snapshot.lock
+        )
+    except Exception:
+        return False
+
+
+def _restore_session(session: InteractionSession, snapshot: _SessionSnapshot) -> None:
+    session.partition = snapshot.partition
+    session.session_id = snapshot.session_id
+    session.limits = _clone_limits(snapshot.limits)
+    session._turns = [_clone_turn(turn) for turn in snapshot.turns]
+    session._attempted = set(snapshot.attempted)
+    session._calls = snapshot.calls
+    session._tokens = snapshot.tokens
+    session._elapsed = snapshot.elapsed
+    session._integrity_failed = snapshot.integrity_failed
+    session._lock = snapshot.lock
+
+
 def _context(session: InteractionSession, current: ProviderMessage) -> tuple[ProviderMessage, ...] | None:
     if _bytes(current) > session.limits.max_context_chars:
         return None
@@ -301,8 +391,8 @@ def _context(session: InteractionSession, current: ProviderMessage) -> tuple[Pro
         chars += pair_chars
     messages: list[ProviderMessage] = []
     for turn in reversed(chosen):
-        messages.extend((turn.user, turn.assistant))
-    messages.append(current)
+        messages.extend((_clone_message(turn.user), _clone_message(turn.assistant)))
+    messages.append(_clone_message(current))
     return tuple(messages)
 
 
@@ -324,8 +414,25 @@ def run_interaction_turn(
         raise ValueError("interaction session required")
     if not isinstance(item, InteractionInput):
         raise ValueError("interaction input required")
+    trusted_item = InteractionInput(
+        partition=item.partition,
+        session_id=item.session_id,
+        request_id=item.request_id,
+        text=item.text,
+        evidence_refs=tuple(item.evidence_refs),
+        action=ActionPresentation(
+            status=item.action.status,
+            receipt_ref=item.action.receipt_ref,
+            authoritative=item.action.authoritative,
+            version=item.action.version,
+        ),
+        version=item.version,
+    )
 
     with session._lock:
+        item = trusted_item
+        if session._integrity_failed:
+            return session._result(item, "error", "session_integrity_failure")
         if item.partition != session.partition or item.session_id != session.session_id:
             return session._result(item, "error", "session_scope_mismatch")
         if len(item.text) > session.limits.max_turn_chars:
@@ -361,9 +468,14 @@ def run_interaction_turn(
         request = ProviderRequest(item.request_id, messages, session.limits.max_output_tokens, deadline, cancel)
         session._attempted.add(item.request_id)
         session._calls += 1
+        snapshot = _snapshot_session(session)
         try:
             reply = provider.complete(request)
         except Exception:
+            if not _session_matches_snapshot(session, snapshot):
+                _restore_session(session, snapshot)
+                session._integrity_failed = True
+                return session._result(item, "error", "session_integrity_failure")
             try:
                 end = float(clock())
             except Exception:
@@ -372,9 +484,13 @@ def run_interaction_turn(
                 session._elapsed += end - start
                 if cancel.cancelled:
                     return session._result(item, "cancelled", "cancelled_during_call")
-                if end >= request.deadline_monotonic or session._elapsed > session.limits.max_total_seconds:
+                if end >= deadline or session._elapsed > session.limits.max_total_seconds:
                     return session._result(item, "timeout", "provider_timeout")
             return session._result(item, "error", "provider_exception")
+        if not _session_matches_snapshot(session, snapshot):
+            _restore_session(session, snapshot)
+            session._integrity_failed = True
+            return session._result(item, "error", "session_integrity_failure")
         try:
             end = float(clock())
         except Exception:
@@ -383,7 +499,7 @@ def run_interaction_turn(
             return session._result(item, "error", "clock_regression")
         session._elapsed += end - start
         cancelled = cancel.cancelled
-        timed_out = end >= request.deadline_monotonic or session._elapsed > session.limits.max_total_seconds
+        timed_out = end >= deadline or session._elapsed > session.limits.max_total_seconds
         validated_reply = _validated_provider_reply(reply)
 
         charged = 0
