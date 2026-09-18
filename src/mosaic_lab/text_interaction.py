@@ -351,7 +351,10 @@ def run_interaction_turn(
         if not isfinite(start):
             return session._result(item, "error", "clock_failure")
         allowed = min(session.limits.per_call_timeout_seconds, session.limits.max_total_seconds - session._elapsed)
-        request = ProviderRequest(item.request_id, messages, session.limits.max_output_tokens, start + allowed, cancel)
+        deadline = start + allowed
+        if not isfinite(deadline) or deadline <= start:
+            return session._result(item, "error", "clock_failure")
+        request = ProviderRequest(item.request_id, messages, session.limits.max_output_tokens, deadline, cancel)
         session._attempted.add(item.request_id)
         session._calls += 1
         try:
@@ -375,21 +378,28 @@ def run_interaction_turn(
         if not isfinite(end) or end < start:
             return session._result(item, "error", "clock_regression")
         session._elapsed += end - start
-        reply = _validated_provider_reply(reply)
-        if reply is None:
-            return session._result(item, "error", "invalid_provider_reply")
+        cancelled = cancel.cancelled
+        timed_out = end >= request.deadline_monotonic or session._elapsed > session.limits.max_total_seconds
+        validated_reply = _validated_provider_reply(reply)
 
-        local_output = len(reply.text.encode()) if reply.text else 0
-        accounting_cap = session.limits.max_total_tokens + 1
-        input_claim = min(reply.input_tokens, accounting_cap)
-        output_claim = min(reply.output_tokens, accounting_cap)
-        effective_output = max(local_output, output_claim)
-        charged = max(local_input, input_claim) + effective_output
-        session._tokens = min(accounting_cap, session._tokens + charged)
-        if cancel.cancelled:
+        charged = 0
+        effective_output = 0
+        if validated_reply is not None:
+            local_output = len(validated_reply.text.encode()) if validated_reply.text else 0
+            accounting_cap = session.limits.max_total_tokens + 1
+            input_claim = min(validated_reply.input_tokens, accounting_cap)
+            output_claim = min(validated_reply.output_tokens, accounting_cap)
+            effective_output = max(local_output, output_claim)
+            charged = max(local_input, input_claim) + effective_output
+            session._tokens = min(accounting_cap, session._tokens + charged)
+
+        if cancelled:
             return session._result(item, "cancelled", "cancelled_during_call")
-        if end >= request.deadline_monotonic or session._elapsed > session.limits.max_total_seconds:
+        if timed_out:
             return session._result(item, "timeout", "provider_timeout")
+        if validated_reply is None:
+            return session._result(item, "error", "invalid_provider_reply")
+        reply = validated_reply
         if effective_output > session.limits.max_output_tokens:
             return session._result(item, "error", "provider_output_token_limit")
         if len(reply.text) > session.limits.max_output_chars:
