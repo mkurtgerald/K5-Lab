@@ -301,8 +301,12 @@ class AuditedDelegatedSimulation(DelegatedSimulation):
                 current_profile=kwargs["current_profile"]
                 if not self._audit_event_matches_upstream(audit_event) or audit_event.request_id!=step.step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=current_policy_revision or audit_event.profile!=current_profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!="attempted" or audit_event.reason!="mocked_effect_admitted" or audit_event.outcome!="attempted" or utc(audit_event.recorded_at)!=audit_now:
                     return self._receipt(status="denied",reason="audit_binding_mismatch",step=step,step_index=idx)
-                try:self._audit_sink.append(audit_event)
-                except Exception:return self._receipt(status="denied",reason="audit_admission_failed",step=step,step_index=idx)
+                try:
+                    admitted=self._audit_sink.append(audit_event)
+                except Exception:
+                    return self._receipt(status="denied",reason="audit_admission_failed",step=step,step_index=idx)
+                if admitted is not True:
+                    return self._receipt(status="reconciliation_required",reason="audit_replay_ambiguous",step=step,step_index=idx)
             return super().attempt_step(step,**kwargs)
 
     def reconcile(self,step_id:str,*,authoritative_outcome:str,reversible:bool,reconciliation_binding:ReconciliationBinding|None=None,audit_event:AuditEvent|None=None,now:datetime|None=None)->SimulationReceipt:
