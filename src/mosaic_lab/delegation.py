@@ -1,378 +1,78 @@
-"""Bounded, non-executing delegated-simulation contracts.
+"""Delegated-simulation public surface with trusted v5 audit persistence binding.
 
-The module models synthetic effect attempts only. It has no transport, executor,
-network access, persistence, or external authority. Trusted state is supplied by
-callers and rechecked at every mocked effect boundary.
+The implementation remains in the frozen core module so this boundary can add one
+narrow admission guarantee without duplicating or weakening the established
+simulation contracts.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
-from math import isfinite
-from threading import Lock
+from dataclasses import replace as _replace
 
-from .audit import AuditBuffer, AuditEvent
-from .contracts import token, utc
-
-_MAX_STEPS = 64
-_MAX_DURATION_SECONDS = 300.0
-_MAX_RATE_PER_MINUTE = 120
-_MAX_TRACKED_DELIVERIES = 4096
-_MAX_AUDIT_APPROVAL_REFS = 4
-_MAX_AUDIT_EVIDENCE_REFS = 128
-_MAX_RECONCILIATION_RESULTS = 4096
-_ALLOWED_OUTCOMES = frozenset({"verified_complete", "failed", "outcome_unknown"})
+from . import _delegation_core as _core
+from ._delegation_core import *  # noqa: F401,F403
 
 
-def _digest(value: str, *, field: str) -> str:
-    if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
-        raise ValueError(f"{field} must be a lowercase sha256 digest")
-    return value
+class _ProposalDigestAuditSink:
+    """Bind persisted effect/reconciliation events to the trusted proposal digest."""
+
+    def __init__(self, sink, proposal_digest: str) -> None:
+        self._sink = sink
+        self._proposal_digest = proposal_digest
+
+    def append(self, event):
+        if not isinstance(event, AuditEvent):
+            return self._sink.append(event)
+        if event.version == "5":
+            if event.proposal_digest != self._proposal_digest:
+                raise ValueError("audit proposal digest mismatch")
+            bound = event
+        elif event.version == "4":
+            bound = _replace(
+                event,
+                proposal_digest=self._proposal_digest,
+                version="5",
+            )
+        else:  # AuditEvent rejects unsupported versions; retain a fail-closed guard.
+            raise ValueError("unsupported audit version")
+        return self._sink.append(bound)
+
+    def __getattr__(self, name):
+        return getattr(self._sink, name)
 
 
-@dataclass(frozen=True)
-class AuditAdmissionBinding:
-    """Trusted immutable identities that an effect audit event must preserve."""
+class AuditedDelegatedSimulation(_core.AuditedDelegatedSimulation):
+    """Audited simulation that persists exact content-bound proposal identity."""
 
-    proposal_id: str
-    proposal_digest: str
-    approval_refs: tuple[str, ...] = ()
-    evidence_refs: tuple[str, ...] = ()
-    evidence_digests: tuple[str, ...] = ()
-    version: str = "1"
-
-    def __post_init__(self) -> None:
-        if self.version != "1":
-            raise ValueError("unsupported audit binding version")
-        token(self.proposal_id)
-        _digest(self.proposal_digest, field="proposal_digest")
-        if (
-            not isinstance(self.approval_refs, tuple)
-            or len(self.approval_refs) > _MAX_AUDIT_APPROVAL_REFS
-            or len(set(self.approval_refs)) != len(self.approval_refs)
-        ):
-            raise ValueError("invalid audit approval refs")
-        for value in self.approval_refs:
-            token(value)
-        if (
-            not isinstance(self.evidence_refs, tuple)
-            or len(self.evidence_refs) > _MAX_AUDIT_EVIDENCE_REFS
-            or len(set(self.evidence_refs)) != len(self.evidence_refs)
-        ):
-            raise ValueError("invalid audit evidence refs")
-        for value in self.evidence_refs:
-            token(value)
-        if (
-            not isinstance(self.evidence_digests, tuple)
-            or len(self.evidence_digests) != len(self.evidence_refs)
-        ):
-            raise ValueError("audit evidence digests must bind every evidence ref")
-        for value in self.evidence_digests:
-            _digest(value, field="audit evidence")
-
-
-@dataclass(frozen=True)
-class ReconciliationBinding:
-    """Trusted immutable identity for one authoritative reconciliation result."""
-
-    step_id: str
-    delivery_id: str
-    source_ref: str
-    result_ref: str
-    result_digest: str
-    authoritative_outcome: str
-    observed_at: datetime
-    version: str = "1"
-
-    def __post_init__(self) -> None:
-        if self.version != "1":
-            raise ValueError("unsupported reconciliation binding version")
-        for value in (self.step_id, self.delivery_id, self.source_ref, self.result_ref):
-            token(value)
-        _digest(self.result_digest, field="reconciliation result")
-        if self.authoritative_outcome not in {"verified_complete", "failed"}:
-            raise ValueError("unsupported reconciliation outcome")
-        utc(self.observed_at)
-
-
-@dataclass(frozen=True)
-class DelegationGrant:
-    grant_id: str; principal_ref: str; partition: str; proposal_digest: str; policy_revision: str; state_digest: str
-    allowed_actions: tuple[str, ...]; allowed_targets: tuple[str, ...]; granted_at: datetime; expires_at: datetime
-    max_steps: int; max_duration_seconds: float; max_actions_per_minute: int; revoked: bool = False
-    profile: str = "delegated_simulation"; version: str = "1"
-    def __post_init__(self) -> None:
-        if self.version != "1" or self.profile != "delegated_simulation": raise ValueError("unsupported delegation")
-        for v in (self.grant_id,self.principal_ref,self.partition,self.policy_revision): token(v)
-        _digest(self.proposal_digest,field="proposal_digest"); _digest(self.state_digest,field="state_digest")
-        for vals,field in ((self.allowed_actions,"allowed_actions"),(self.allowed_targets,"allowed_targets")):
-            if not isinstance(vals,tuple) or not vals or len(vals)>64 or len(set(vals))!=len(vals): raise ValueError(f"invalid {field}")
-            for v in vals: token(v)
-        if utc(self.expires_at)<=utc(self.granted_at): raise ValueError("delegation expiry must follow grant time")
-        if not isinstance(self.revoked,bool): raise ValueError("revoked must be boolean")
-        if isinstance(self.max_steps,bool) or not isinstance(self.max_steps,int) or not 1<=self.max_steps<=_MAX_STEPS: raise ValueError("max_steps outside bounded limit")
-        if isinstance(self.max_duration_seconds,bool) or not isinstance(self.max_duration_seconds,(int,float)) or not isfinite(self.max_duration_seconds) or not 0<float(self.max_duration_seconds)<=_MAX_DURATION_SECONDS: raise ValueError("max_duration_seconds outside bounded limit")
-        if isinstance(self.max_actions_per_minute,bool) or not isinstance(self.max_actions_per_minute,int) or not 1<=self.max_actions_per_minute<=_MAX_RATE_PER_MINUTE: raise ValueError("max_actions_per_minute outside bounded limit")
-
-
-@dataclass(frozen=True)
-class SimulationStep:
-    step_id: str; delivery_id: str; action_ref: str; target_ref: str; version: str = "1"
-    def __post_init__(self) -> None:
-        if self.version!="1": raise ValueError("unsupported step version")
-        for v in (self.step_id,self.delivery_id,self.action_ref,self.target_ref): token(v)
-
-
-@dataclass(frozen=True)
-class SimulationReceipt:
-    status: str; reason: str; session_id: str; step_id: str; delivery_id: str; step_index: int; mocked_effects: int
-    completed_steps: int; failed_steps: int; unknown_steps: int; rollback_available: bool
-    authorized: bool=False; execute: bool=False; external_actions: int=0; version: str="1"
-    def __post_init__(self)->None:
-        if self.status not in {"denied","cancelled","budget_exhausted","rate_limited","reconciliation_required","verified_complete","failed","outcome_unknown"}: raise ValueError("unsupported simulation status")
-        for v in (self.reason,self.session_id,self.step_id,self.delivery_id): token(v)
-        for v in (self.step_index,self.mocked_effects,self.completed_steps,self.failed_steps,self.unknown_steps,self.external_actions):
-            if isinstance(v,bool) or not isinstance(v,int) or v<0: raise ValueError("receipt counters must be non-negative integers")
-        if self.mocked_effects not in {0,1}: raise ValueError("receipt may record at most one mocked effect")
-        if self.authorized is not False or self.execute is not False or self.external_actions!=0: raise ValueError("public simulation receipts cannot grant execution authority")
-        if self.rollback_available is not False: raise ValueError("public simulation receipts cannot claim rollback availability without trusted provenance")
-        if self.version!="1": raise ValueError("invalid simulation receipt")
-
-
-class DelegatedSimulation:
-    def __init__(self,grant:DelegationGrant,*,session_id:str,started_at:datetime,max_tracked_deliveries:int=256)->None:
-        if not isinstance(grant,DelegationGrant): raise ValueError("trusted delegation grant required")
-        token(session_id); started=utc(started_at)
-        if started<utc(grant.granted_at) or started>=utc(grant.expires_at): raise ValueError("session start outside delegation lifetime")
-        if isinstance(max_tracked_deliveries,bool) or not isinstance(max_tracked_deliveries,int) or not 1<=max_tracked_deliveries<=_MAX_TRACKED_DELIVERIES: raise ValueError("max_tracked_deliveries outside bounded limit")
-        self._grant=grant; self._session_id=session_id; self._started_at=started; self._max_tracked_deliveries=max_tracked_deliveries
-        self._receipts={}; self._delivery_steps={}; self._step_receipts={}; self._step_reversible={}; self._effect_times=[]; self._step_effect_times={}; self._lock=Lock()
-    def _counts(self):
-        vals=self._step_receipts.values(); return (sum(x.status=="verified_complete" for x in vals),sum(x.status=="failed" for x in vals),sum(x.status=="outcome_unknown" for x in vals))
-    def _receipt(self,*,status,reason,step,step_index,mocked_effects=0,rollback_available=False):
-        c,f,u=self._counts(); return SimulationReceipt(status,reason,self._session_id,step.step_id,step.delivery_id,step_index,mocked_effects,c,f,u,rollback_available)
-    def _replayed_delivery(self,step:SimulationStep)->SimulationReceipt|None:
-        existing=self._receipts.get(step.delivery_id)
-        if existing is None:return None
-        if self._delivery_steps.get(step.delivery_id)!=step:
-            return self._receipt(status="denied",reason="delivery_identity_collision",step=step,step_index=existing.step_index)
-        return existing
-    def attempt_step(self,step:SimulationStep,*,now:datetime,current_policy_revision:str,current_state_digest:str,current_profile:str,authority_available:bool,cancelled:bool,grant_revoked:bool,mocked_outcome:str,reversible:bool)->SimulationReceipt:
-        if not isinstance(step,SimulationStep): raise ValueError("trusted simulation step required")
-        now=utc(now); token(current_policy_revision); _digest(current_state_digest,field="current_state_digest")
-        if current_profile not in {"read_only","recommend","approval_required","delegated_simulation"}: raise ValueError("unsupported current profile")
-        if not all(isinstance(v,bool) for v in (authority_available,cancelled,grant_revoked,reversible)): raise ValueError("boolean flags required")
-        if mocked_outcome not in _ALLOWED_OUTCOMES: raise ValueError("unsupported mocked outcome")
-        with self._lock:
-            existing=self._replayed_delivery(step)
-            if existing is not None:return existing
-            prior=self._step_receipts.get(step.step_id); idx=len(self._step_receipts)+1
-            if prior is not None:
-                if prior.status=="outcome_unknown": return self._receipt(status="reconciliation_required",reason="ambiguous_prior_outcome",step=step,step_index=prior.step_index)
-                return self._receipt(status="denied",reason="duplicate_step",step=step,step_index=prior.step_index)
-            checks=[(len(self._receipts)>=self._max_tracked_deliveries,"denied","replay_ledger_capacity"),(not authority_available,"denied","authority_unavailable"),(cancelled,"cancelled","session_cancelled"),(self._grant.revoked or grant_revoked,"denied","grant_revoked"),(current_profile!=self._grant.profile,"denied","profile_changed"),(current_policy_revision!=self._grant.policy_revision,"denied","policy_changed"),(current_state_digest!=self._grant.state_digest,"denied","state_changed"),(now>=utc(self._grant.expires_at),"denied","grant_expired")]
-            for cond,status,reason in checks:
-                if cond:return self._receipt(status=status,reason=reason,step=step,step_index=idx)
-            elapsed=(now-self._started_at).total_seconds()
-            if elapsed<0:return self._receipt(status="denied",reason="time_reversal",step=step,step_index=idx)
-            if elapsed>float(self._grant.max_duration_seconds):return self._receipt(status="budget_exhausted",reason="time_budget",step=step,step_index=idx)
-            if len(self._step_receipts)>=self._grant.max_steps:return self._receipt(status="budget_exhausted",reason="step_budget",step=step,step_index=idx)
-            if step.action_ref not in self._grant.allowed_actions:return self._receipt(status="denied",reason="action_out_of_scope",step=step,step_index=idx)
-            if step.target_ref not in self._grant.allowed_targets:return self._receipt(status="denied",reason="target_out_of_scope",step=step,step_index=idx)
-            cutoff=now-timedelta(seconds=60); self._effect_times=[x for x in self._effect_times if x>cutoff]
-            if len(self._effect_times)>=self._grant.max_actions_per_minute:return self._receipt(status="rate_limited",reason="rate_budget",step=step,step_index=idx)
-            self._effect_times.append(now); self._step_effect_times[step.step_id]=now; self._step_reversible[step.step_id]=reversible; receipt=self._receipt(status=mocked_outcome,reason="mocked_effect_recorded",step=step,step_index=idx,mocked_effects=1,rollback_available=False)
-            self._step_receipts[step.step_id]=receipt; c,f,u=self._counts(); receipt=replace(receipt,completed_steps=c,failed_steps=f,unknown_steps=u); self._step_receipts[step.step_id]=receipt; self._delivery_steps[step.delivery_id]=step; self._receipts[step.delivery_id]=receipt; return receipt
-    def reconcile(self,step_id:str,*,authoritative_outcome:str,reversible:bool)->SimulationReceipt:
-        token(step_id)
-        if authoritative_outcome not in {"verified_complete","failed"} or not isinstance(reversible,bool): raise ValueError("invalid reconciliation")
-        with self._lock:
-            prior=self._step_receipts.get(step_id)
-            if prior is None: raise ValueError("cannot reconcile an unknown step")
-            if prior.status!="outcome_unknown":return prior
-            original_reversible=self._step_reversible.get(step_id)
-            if original_reversible is None or reversible!=original_reversible:
-                return replace(prior,status="reconciliation_required",reason="reversibility_mismatch",mocked_effects=0,rollback_available=False)
-            resolved=replace(prior,status=authoritative_outcome,reason="reconciled",mocked_effects=0,rollback_available=False); self._step_receipts[step_id]=resolved
-            c,f,u=self._counts(); resolved=replace(resolved,completed_steps=c,failed_steps=f,unknown_steps=u); self._step_receipts[step_id]=resolved; self._receipts[resolved.delivery_id]=resolved; return resolved
-
-
-class AuditedDelegatedSimulation(DelegatedSimulation):
-    """Synthetic delegation requiring exact upstream identity and audit admission.
-
-    Audit admission is not claimed to be durable/tamper-evident here; a private
-    production adapter must provide that property. Absence or failure fails closed.
-    """
-    def __init__(self,grant:DelegationGrant,*,session_id:str,started_at:datetime,audit_sink:AuditBuffer|None,audit_binding:AuditAdmissionBinding,max_tracked_deliveries:int=256)->None:
-        super().__init__(grant,session_id=session_id,started_at=started_at,max_tracked_deliveries=max_tracked_deliveries)
-        if not isinstance(audit_binding, AuditAdmissionBinding):
-            raise ValueError("trusted audit binding required")
-        if audit_binding.proposal_digest != grant.proposal_digest:
-            raise ValueError("audit proposal digest mismatch")
-        self._audit_sink=audit_sink
-        self._audit_binding=audit_binding
-        self._audit_gate=Lock()
-        self._reconciliation_results: dict[str, ReconciliationBinding] = {}
-
-    def _audit_event_matches_upstream(self, audit_event: AuditEvent) -> bool:
-        return (
-            audit_event.proposal_id == self._audit_binding.proposal_id
-            and audit_event.bound_approval_refs == self._audit_binding.approval_refs
-            and audit_event.evidence_refs == self._audit_binding.evidence_refs
-            and audit_event.evidence_digests == self._audit_binding.evidence_digests
+    def __init__(
+        self,
+        grant: DelegationGrant,
+        *,
+        session_id: str,
+        started_at,
+        audit_sink: AuditBuffer | None,
+        audit_binding: AuditAdmissionBinding,
+        max_tracked_deliveries: int = 256,
+    ) -> None:
+        bound_sink = (
+            None
+            if audit_sink is None
+            else _ProposalDigestAuditSink(audit_sink, audit_binding.proposal_digest)
+            if isinstance(audit_binding, AuditAdmissionBinding)
+            else audit_sink
+        )
+        super().__init__(
+            grant,
+            session_id=session_id,
+            started_at=started_at,
+            audit_sink=bound_sink,
+            audit_binding=audit_binding,
+            max_tracked_deliveries=max_tracked_deliveries,
         )
 
-    def _preflight_before_audit(self, step: SimulationStep, kwargs: dict) -> SimulationReceipt | None:
-        """Mirror effect-boundary denials before recording an attempted audit event."""
-        try:
-            now = utc(kwargs["now"])
-            current_policy_revision = kwargs["current_policy_revision"]
-            current_state_digest = kwargs["current_state_digest"]
-            current_profile = kwargs["current_profile"]
-            authority_available = kwargs["authority_available"]
-            cancelled = kwargs["cancelled"]
-            grant_revoked = kwargs["grant_revoked"]
-            mocked_outcome = kwargs["mocked_outcome"]
-            reversible = kwargs["reversible"]
-            token(current_policy_revision)
-            _digest(current_state_digest, field="current_state_digest")
-        except (KeyError, TypeError, ValueError):
-            idx = len(self._step_receipts) + 1
-            return self._receipt(status="denied", reason="audit_binding_mismatch", step=step, step_index=idx)
-        if current_profile not in {"read_only","recommend","approval_required","delegated_simulation"}:
-            idx = len(self._step_receipts) + 1
-            return self._receipt(status="denied", reason="audit_binding_mismatch", step=step, step_index=idx)
-        if not all(isinstance(v, bool) for v in (authority_available, cancelled, grant_revoked, reversible)) or mocked_outcome not in _ALLOWED_OUTCOMES:
-            idx = len(self._step_receipts) + 1
-            return self._receipt(status="denied", reason="audit_binding_mismatch", step=step, step_index=idx)
-
-        existing = self._replayed_delivery(step)
-        if existing is not None:
-            return existing
-        prior = self._step_receipts.get(step.step_id)
-        idx = len(self._step_receipts) + 1
-        if prior is not None:
-            if prior.status == "outcome_unknown":
-                return self._receipt(status="reconciliation_required", reason="ambiguous_prior_outcome", step=step, step_index=prior.step_index)
-            return self._receipt(status="denied", reason="duplicate_step", step=step, step_index=prior.step_index)
-
-        checks = [
-            (len(self._receipts) >= self._max_tracked_deliveries, "denied", "replay_ledger_capacity"),
-            (not authority_available, "denied", "authority_unavailable"),
-            (cancelled, "cancelled", "session_cancelled"),
-            (self._grant.revoked or grant_revoked, "denied", "grant_revoked"),
-            (current_profile != self._grant.profile, "denied", "profile_changed"),
-            (current_policy_revision != self._grant.policy_revision, "denied", "policy_changed"),
-            (current_state_digest != self._grant.state_digest, "denied", "state_changed"),
-            (now >= utc(self._grant.expires_at), "denied", "grant_expired"),
-        ]
-        for condition, status, reason in checks:
-            if condition:
-                return self._receipt(status=status, reason=reason, step=step, step_index=idx)
-        elapsed = (now - self._started_at).total_seconds()
-        if elapsed < 0:
-            return self._receipt(status="denied", reason="time_reversal", step=step, step_index=idx)
-        if elapsed > float(self._grant.max_duration_seconds):
-            return self._receipt(status="budget_exhausted", reason="time_budget", step=step, step_index=idx)
-        if len(self._step_receipts) >= self._grant.max_steps:
-            return self._receipt(status="budget_exhausted", reason="step_budget", step=step, step_index=idx)
-        if step.action_ref not in self._grant.allowed_actions:
-            return self._receipt(status="denied", reason="action_out_of_scope", step=step, step_index=idx)
-        if step.target_ref not in self._grant.allowed_targets:
-            return self._receipt(status="denied", reason="target_out_of_scope", step=step, step_index=idx)
-        cutoff = now - timedelta(seconds=60)
-        active_effect_times = [item for item in self._effect_times if item > cutoff]
-        if len(active_effect_times) >= self._grant.max_actions_per_minute:
-            return self._receipt(status="rate_limited", reason="rate_budget", step=step, step_index=idx)
-        return None
-
-    def attempt_step(self,step:SimulationStep,*,audit_event:AuditEvent|None,**kwargs)->SimulationReceipt:
-        if not isinstance(step,SimulationStep): raise ValueError("trusted simulation step required")
-        with self._audit_gate:
-            with self._lock:
-                preflight = self._preflight_before_audit(step, kwargs)
-                if preflight is not None:
-                    return preflight
-                idx=len(self._step_receipts)+1
-                if self._audit_sink is None:return self._receipt(status="denied",reason="audit_unavailable",step=step,step_index=idx)
-                if not isinstance(audit_event,AuditEvent):return self._receipt(status="denied",reason="audit_unavailable",step=step,step_index=idx)
-                audit_now=utc(kwargs["now"])
-                current_policy_revision=kwargs["current_policy_revision"]
-                current_profile=kwargs["current_profile"]
-                if not self._audit_event_matches_upstream(audit_event) or audit_event.request_id!=step.step_id or audit_event.partition!=self._grant.partition or audit_event.principal_ref!=self._grant.principal_ref or audit_event.policy_revision!=current_policy_revision or audit_event.profile!=current_profile or audit_event.grant_ref!=self._grant.grant_id or audit_event.decision!="attempted" or audit_event.reason!="mocked_effect_admitted" or audit_event.outcome!="attempted" or utc(audit_event.recorded_at)!=audit_now:
-                    return self._receipt(status="denied",reason="audit_binding_mismatch",step=step,step_index=idx)
-                try:
-                    admitted=self._audit_sink.append(audit_event)
-                except Exception:
-                    return self._receipt(status="denied",reason="audit_admission_failed",step=step,step_index=idx)
-                if admitted is not True:
-                    return self._receipt(status="reconciliation_required",reason="audit_replay_ambiguous",step=step,step_index=idx)
-            return super().attempt_step(step,**kwargs)
-
-    def reconcile(self,step_id:str,*,authoritative_outcome:str,reversible:bool,reconciliation_binding:ReconciliationBinding|None=None,audit_event:AuditEvent|None=None,now:datetime|None=None)->SimulationReceipt:
-        token(step_id)
-        if authoritative_outcome not in {"verified_complete","failed"} or not isinstance(reversible,bool):
-            raise ValueError("invalid reconciliation")
-        with self._audit_gate:
-            with self._lock:
-                prior=self._step_receipts.get(step_id)
-                if prior is None:
-                    raise ValueError("cannot reconcile an unknown step")
-                if prior.status!="outcome_unknown":
-                    return prior
-                if not isinstance(reconciliation_binding, ReconciliationBinding):
-                    return replace(prior,status="reconciliation_required",reason="reconciliation_binding_required",mocked_effects=0,rollback_available=False)
-                try:
-                    audit_now=utc(now)
-                    observed_at=utc(reconciliation_binding.observed_at)
-                except (TypeError,ValueError):
-                    return replace(prior,status="reconciliation_required",reason="reconciliation_binding_mismatch",mocked_effects=0,rollback_available=False)
-                effect_time=self._step_effect_times.get(step_id)
-                if (
-                    reconciliation_binding.step_id != step_id
-                    or reconciliation_binding.delivery_id != prior.delivery_id
-                    or reconciliation_binding.authoritative_outcome != authoritative_outcome
-                    or effect_time is None
-                    or observed_at < effect_time
-                    or observed_at > audit_now
-                ):
-                    return replace(prior,status="reconciliation_required",reason="reconciliation_binding_mismatch",mocked_effects=0,rollback_available=False)
-                existing_result=self._reconciliation_results.get(reconciliation_binding.result_ref)
-                if existing_result is not None and existing_result != reconciliation_binding:
-                    return replace(prior,status="reconciliation_required",reason="reconciliation_result_collision",mocked_effects=0,rollback_available=False)
-                if len(self._reconciliation_results) >= _MAX_RECONCILIATION_RESULTS and existing_result is None:
-                    return replace(prior,status="reconciliation_required",reason="reconciliation_result_capacity",mocked_effects=0,rollback_available=False)
-                original_reversible=self._step_reversible.get(step_id)
-                if original_reversible is None or reversible!=original_reversible:
-                    return replace(prior,status="reconciliation_required",reason="reversibility_mismatch",mocked_effects=0,rollback_available=False)
-                if self._audit_sink is None:
-                    return replace(prior,status="reconciliation_required",reason="audit_unavailable",mocked_effects=0,rollback_available=False)
-                expected_decision="returned" if authoritative_outcome=="verified_complete" else "failed"
-                if (
-                    not isinstance(audit_event,AuditEvent)
-                    or not self._audit_event_matches_upstream(audit_event)
-                    or audit_event.event_id!=reconciliation_binding.result_ref
-                    or audit_event.request_id!=step_id
-                    or audit_event.partition!=self._grant.partition
-                    or audit_event.principal_ref!=self._grant.principal_ref
-                    or audit_event.policy_revision!=self._grant.policy_revision
-                    or audit_event.profile!=self._grant.profile
-                    or audit_event.grant_ref!=self._grant.grant_id
-                    or audit_event.decision!=expected_decision
-                    or audit_event.reason!="reconciled"
-                    or audit_event.outcome!=authoritative_outcome
-                    or utc(audit_event.recorded_at)!=audit_now
-                    or audit_event.reconciliation_binding_version!=reconciliation_binding.version
-                    or audit_event.reconciliation_delivery_id!=reconciliation_binding.delivery_id
-                    or audit_event.reconciliation_source_ref!=reconciliation_binding.source_ref
-                    or audit_event.reconciliation_result_ref!=reconciliation_binding.result_ref
-                    or audit_event.reconciliation_result_digest!=reconciliation_binding.result_digest
-                    or utc(audit_event.reconciliation_observed_at)!=observed_at
-                ):
-                    return replace(prior,status="reconciliation_required",reason="audit_binding_mismatch",mocked_effects=0,rollback_available=False)
-                try:
-                    self._audit_sink.append(audit_event)
-                except Exception:
-                    return replace(prior,status="reconciliation_required",reason="audit_admission_failed",mocked_effects=0,rollback_available=False)
-                self._reconciliation_results[reconciliation_binding.result_ref]=reconciliation_binding
-            return super().reconcile(step_id,authoritative_outcome=authoritative_outcome,reversible=reversible)
+    def _audit_event_matches_upstream(self, audit_event: AuditEvent) -> bool:
+        if not super()._audit_event_matches_upstream(audit_event):
+            return False
+        return (
+            audit_event.version == "4"
+            or audit_event.proposal_digest == self._audit_binding.proposal_digest
+        )
