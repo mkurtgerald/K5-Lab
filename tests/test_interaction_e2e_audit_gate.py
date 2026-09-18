@@ -243,16 +243,20 @@ def test_upstream_identity_substitution_is_denied_before_audit_admission():
         assert audit.snapshot() == ()
 
 
-def test_unbound_audit_cannot_claim_approval_or_evidence_provenance():
-    _, digest, _, evidence_digest = upstream_digest()
-    audit = AuditBuffer(max_entries=8)
-    simulation = AuditedDelegatedSimulation(
-        grant(digest), session_id="session1", started_at=NOW, audit_sink=audit
-    )
-    receipt = attempt(simulation, evidence_digest)
-    assert (receipt.status, receipt.reason) == ("denied", "audit_binding_mismatch")
-    assert receipt.mocked_effects == 0
-    assert audit.snapshot() == ()
+def test_unbound_audit_construction_is_rejected():
+    _, digest, _, _ = upstream_digest()
+    try:
+        AuditedDelegatedSimulation(
+            grant(digest),
+            session_id="session1",
+            started_at=NOW,
+            audit_sink=AuditBuffer(max_entries=8),
+            audit_binding=None,
+        )
+    except ValueError as exc:
+        assert str(exc) == "trusted audit binding required"
+    else:
+        raise AssertionError("unbound audited simulation construction must fail closed")
 
 
 def test_binding_rejects_mismatched_digest():
