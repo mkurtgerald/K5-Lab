@@ -168,6 +168,15 @@ def admission_event(evidence_digest):
     )
 
 
+def persisted_admission_event(evidence_digest, proposal_digest, **changes):
+    values = dict(
+        proposal_digest=proposal_digest,
+        version="5",
+    )
+    values.update(changes)
+    return replace(admission_event(evidence_digest), **values)
+
+
 def attempt(simulation, evidence_digest, *, audit_event=None):
     return simulation.attempt_step(
         SimulationStep("step1", "delivery1", "act1", "target1"),
@@ -198,7 +207,7 @@ def test_end_to_end_effect_requires_successful_audit_admission():
     assert receipt.status == "verified_complete"
     assert receipt.mocked_effects == 1
     assert not receipt.authorized and not receipt.execute and receipt.external_actions == 0
-    assert audit.snapshot() == (admission_event(evidence_digest),)
+    assert audit.snapshot() == (persisted_admission_event(evidence_digest, digest),)
 
 
 def test_end_to_end_audit_unavailable_has_zero_mocked_effects():
@@ -289,6 +298,11 @@ def test_multi_approval_identity_is_carried_without_approximation():
         approval_ref=None,
         approval_refs=("approval1", "approval2"),
     )
+    persisted_exact = replace(
+        exact,
+        proposal_digest=digest,
+        version="5",
+    )
     audit = AuditBuffer(max_entries=8)
     simulation = AuditedDelegatedSimulation(
         grant(digest),
@@ -300,9 +314,10 @@ def test_multi_approval_identity_is_carried_without_approximation():
     receipt = attempt(simulation, evidence_digest, audit_event=exact)
     assert receipt.status == "verified_complete"
     assert receipt.mocked_effects == 1
-    assert audit.snapshot() == (exact,)
-    assert exact.bound_approval_refs == ("approval1", "approval2")
-    assert exact.version == "4"
+    assert audit.snapshot() == (persisted_exact,)
+    assert persisted_exact.bound_approval_refs == ("approval1", "approval2")
+    assert persisted_exact.proposal_digest == digest
+    assert persisted_exact.version == "5"
 
     forged = replace(
         exact,
