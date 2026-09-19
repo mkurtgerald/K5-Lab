@@ -292,3 +292,48 @@ def test_admission_gate_is_released_after_provider_exception():
     assert (first.status, first.reason) == ("error", "provider_exception")
     assert (second.status, second.reason) == ("error", "provider_exception")
     assert provider.calls == 2
+
+
+def test_reconstructed_gate_cannot_bypass_boundary_inflight_limit():
+    contract = hard_contract(max_inflight_calls=1)
+    first_gate = ProviderBoundaryGate(contract)
+    second_gate = ProviderBoundaryGate(contract)
+    provider = BlockingProvider()
+    first_session = InteractionSession(partition="p1", session_id="s1")
+    second_session = InteractionSession(partition="p1", session_id="s2")
+    first_result = {}
+
+    def run_first() -> None:
+        first_result["value"] = run_hardened_interaction_turn(
+            first_session,
+            item("req1", "s1"),
+            provider,
+            execution_contract=contract,
+            admission_gate=first_gate,
+        )
+
+    worker = Thread(target=run_first)
+    worker.start()
+    assert provider.entered.wait(1.0)
+    try:
+        second = run_hardened_interaction_turn(
+            second_session,
+            item("req2", "s2"),
+            provider,
+            execution_contract=contract,
+            admission_gate=second_gate,
+        )
+    finally:
+        provider.release.set()
+        worker.join(2.0)
+
+    assert not worker.is_alive()
+    assert (second.status, second.reason) == ("unavailable", "provider_inflight_limit_reached")
+    assert second.calls_used == 0
+    assert second_session.turns() == ()
+    assert provider.calls == 1
+    assert provider.peak_active == 1
+    assert first_result["value"].status == "ok"
+    assert second.authorized is False
+    assert second.execute is False
+    assert second.external_actions == 0
