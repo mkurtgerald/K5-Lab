@@ -9,9 +9,10 @@ contract's declared in-flight call bound before provider entry.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, RLock
 from time import monotonic
 from typing import Callable
+from weakref import WeakValueDictionary
 
 from .contracts import token
 from .text_interaction import (
@@ -75,16 +76,44 @@ def _validated_contract(value: object) -> ProviderBoundaryContract | None:
         return None
 
 
-class ProviderBoundaryGate:
-    """Shared non-blocking admission state for one trusted boundary instance.
+class _ProviderAdmissionState:
+    """Process-local permit pool shared by every live gate for one boundary."""
 
-    Callers must create one long-lived gate for the qualified boundary and reuse
-    it for every provider call admitted by that boundary. Creating one gate per
-    call is not qualification evidence and must be rejected by integration
-    review. The gate never authorizes an action; it only bounds provider entry.
+    __slots__ = ("permits", "__weakref__")
+
+    def __init__(self, max_inflight_calls: int) -> None:
+        self.permits = BoundedSemaphore(max_inflight_calls)
+
+
+_GATE_REGISTRY_LOCK = RLock()
+_GATE_REGISTRY: WeakValueDictionary[
+    tuple[str, str, int],
+    _ProviderAdmissionState,
+] = WeakValueDictionary()
+
+
+def _shared_admission_state(
+    contract: ProviderBoundaryContract,
+) -> _ProviderAdmissionState:
+    key = (contract.boundary_id, contract.version, contract.max_inflight_calls)
+    with _GATE_REGISTRY_LOCK:
+        state = _GATE_REGISTRY.get(key)
+        if state is None:
+            state = _ProviderAdmissionState(contract.max_inflight_calls)
+            _GATE_REGISTRY[key] = state
+        return state
+
+
+class ProviderBoundaryGate:
+    """Shared non-blocking admission state for one trusted boundary identity.
+
+    Multiple live gate objects for the same qualified boundary intentionally
+    share one process-local permit pool, so reconstructing a gate cannot bypass
+    the declared max_inflight_calls bound. The gate never authorizes an action;
+    it only bounds provider entry.
     """
 
-    __slots__ = ("_boundary_id", "_max_inflight_calls", "_version", "_permits")
+    __slots__ = ("_boundary_id", "_max_inflight_calls", "_version", "_state")
 
     def __init__(self, contract: ProviderBoundaryContract) -> None:
         trusted = _validated_contract(contract)
@@ -93,7 +122,7 @@ class ProviderBoundaryGate:
         self._boundary_id = trusted.boundary_id
         self._max_inflight_calls = trusted.max_inflight_calls
         self._version = trusted.version
-        self._permits = BoundedSemaphore(trusted.max_inflight_calls)
+        self._state = _shared_admission_state(trusted)
 
     def matches(self, contract: ProviderBoundaryContract) -> bool:
         trusted = _validated_contract(contract)
@@ -106,10 +135,10 @@ class ProviderBoundaryGate:
         )
 
     def acquire(self) -> bool:
-        return self._permits.acquire(blocking=False)
+        return self._state.permits.acquire(blocking=False)
 
     def release(self) -> None:
-        self._permits.release()
+        self._state.permits.release()
 
 
 def _validated_gate(
