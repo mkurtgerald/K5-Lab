@@ -182,5 +182,22 @@
     "vulnerability_review_complete": false,
     "target_platform_review_complete": false,
     "commercial_distribution_approved": false
+  },
+  "promotion_review": {
+    "status": "demoted_pending_material_complement_evidence",
+    "review_date": "2026-09-18",
+    "basis": [
+      "Existing held-out evidence uses unseen seeds from the same synthetic distribution and does not establish robustness to an unseen distribution.",
+      "Existing evidence does not establish a material quality or resource-cost advantage over both the deterministic heuristic and CP-SAT baselines."
+    ],
+    "required_before_reconsideration": [
+      "immutable synthetic unseen-distribution split",
+      "held-out comparison against deterministic heuristic and CP-SAT on quality and robustness",
+      "measured latency and memory/resource comparison against both simpler baselines",
+      "deterministic replay with zero prohibited simulated actions",
+      "zero authorization and zero external actions",
+      "no saved public policy artifact or learned weights"
+    ],
+    "promotion_allowed": false
   }
 }
