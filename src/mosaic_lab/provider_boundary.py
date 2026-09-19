@@ -188,6 +188,8 @@ def run_hardened_interaction_turn(
     configuration, never provider/model data. Actual isolation/termination
     remains an adapter qualification requirement outside this public generic
     module. The public gate enforces the declared concurrent-entry bound.
+    Per-session serialization is acquired before a global provider permit so
+    queued same-session work cannot consume capacity needed by other sessions.
     """
     if type(session) is not InteractionSession:
         raise ValueError("interaction session required")
@@ -218,25 +220,26 @@ def run_hardened_interaction_turn(
             session.tokens_used,
             session.elapsed_seconds,
         )
-    if not gate.acquire():
-        return InteractionResult(
-            "unavailable",
-            "provider_inflight_limit_reached",
-            trusted_item.request_id,
-            "",
-            trusted_item.evidence_refs,
-            trusted_item.action,
-            session.calls_used,
-            session.tokens_used,
-            session.elapsed_seconds,
-        )
-    try:
-        return run_interaction_turn(
-            session,
-            trusted_item,
-            provider,
-            cancellation=cancellation,
-            clock=clock,
-        )
-    finally:
-        gate.release()
+    with session._lock:
+        if not gate.acquire():
+            return InteractionResult(
+                "unavailable",
+                "provider_inflight_limit_reached",
+                trusted_item.request_id,
+                "",
+                trusted_item.evidence_refs,
+                trusted_item.action,
+                session.calls_used,
+                session.tokens_used,
+                session.elapsed_seconds,
+            )
+        try:
+            return run_interaction_turn(
+                session,
+                trusted_item,
+                provider,
+                cancellation=cancellation,
+                clock=clock,
+            )
+        finally:
+            gate.release()
