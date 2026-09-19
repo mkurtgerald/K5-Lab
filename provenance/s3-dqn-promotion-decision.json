@@ -1,0 +1,32 @@
+{
+  "stage": "S3",
+  "decision_version": "1",
+  "candidate": "current-dqn-learned-proposal-candidate",
+  "decision": "rejected",
+  "decision_date": "2026-09-18",
+  "evidence": {
+    "exact_head": "d311fb38baa18ee5ae2b28f592cbf1f85e01b7b5",
+    "generic_checks_run": 35416082690,
+    "isolated_learned_policy_run": 35416082688,
+    "runtime_provenance_audit_run": 35416082702
+  },
+  "basis": [
+    "Held-out same-distribution and long-horizon evidence does not establish a material quality advantage over the simpler CP-SAT baseline.",
+    "The learned candidate introduces a materially larger dependency, native-artifact, memory, and vulnerability-review surface than deterministic and CP-SAT planning.",
+    "Continuing shifted-distribution qualification for this candidate would add GTM complexity without demonstrated acceptance benefit."
+  ],
+  "disposition": {
+    "promotion_allowed": false,
+    "continued_gtm_qualification_allowed": false,
+    "saved_policy_allowed": false,
+    "public_weights_allowed": false,
+    "authorization": false,
+    "external_actions": 0
+  },
+  "future_reentry_gate": [
+    "A future learned candidate requires a measured quality or robustness gap that simpler deterministic or CP-SAT planning cannot economically close.",
+    "Any future learned candidate must use a preregistered immutable synthetic shifted-distribution split with held-out comparison against deterministic and CP-SAT baselines.",
+    "Any future candidate must preserve hard project-owned constraints, deterministic replay evidence, zero prohibited simulated actions, zero authorization, zero external actions, and no public learned weights."
+  ],
+  "commercial_distribution_approved": false
+}

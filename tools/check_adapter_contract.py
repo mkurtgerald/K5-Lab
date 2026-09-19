@@ -4,13 +4,13 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from mosaic_lab.adapter_contract import canonical_contract_text
+from mosaic_lab.adapter_contract import CONTRACT_VERSION, canonical_contract_text
 
 
 def validate_repository(root: Path = ROOT) -> list[str]:
-    path = root / "docs/contracts/adapter-v1.json"
+    path = root / f"docs/contracts/adapter-v{CONTRACT_VERSION}.json"
     if not path.is_file():
-        return ["docs/contracts/adapter-v1.json is missing"]
+        return [f"docs/contracts/adapter-v{CONTRACT_VERSION}.json is missing"]
     actual = path.read_text(encoding="utf-8")
     expected = canonical_contract_text()
     if actual != expected:
@@ -24,7 +24,7 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
-    print("adapter-contract-v1:ok")
+    print(f"adapter-contract-v{CONTRACT_VERSION}:ok")
     return 0
 
 
