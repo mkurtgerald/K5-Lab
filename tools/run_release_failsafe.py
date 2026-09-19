@@ -77,7 +77,7 @@ def run() -> dict[str, object]:
 
     incompatible_rejected = False
     try:
-        negotiate_version(("2",))
+        negotiate_version(("unsupported-version",))
     except IncompatibleAdapterContract:
         incompatible_rejected = True
     request = AdapterRequest("req-release", "p1", "r1", timeout_ms=250)
