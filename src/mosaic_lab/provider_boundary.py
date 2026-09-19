@@ -3,11 +3,13 @@
 This module does not implement or claim process/container isolation. It prevents
 hardened callers from silently falling back to the cooperative provider path
 unless a separately qualified trusted adapter declares bounded, terminable
-timeout and cancellation behavior.
+timeout and cancellation behavior. A shared admission gate enforces the
+contract's declared in-flight call bound before provider entry.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from threading import BoundedSemaphore
 from time import monotonic
 from typing import Callable
 
@@ -73,6 +75,55 @@ def _validated_contract(value: object) -> ProviderBoundaryContract | None:
         return None
 
 
+class ProviderBoundaryGate:
+    """Shared non-blocking admission state for one trusted boundary instance.
+
+    Callers must create one long-lived gate for the qualified boundary and reuse
+    it for every provider call admitted by that boundary. Creating one gate per
+    call is not qualification evidence and must be rejected by integration
+    review. The gate never authorizes an action; it only bounds provider entry.
+    """
+
+    __slots__ = ("_boundary_id", "_max_inflight_calls", "_version", "_permits")
+
+    def __init__(self, contract: ProviderBoundaryContract) -> None:
+        trusted = _validated_contract(contract)
+        if trusted is None or not trusted.hard_boundary_ready:
+            raise ValueError("qualified provider boundary contract required")
+        self._boundary_id = trusted.boundary_id
+        self._max_inflight_calls = trusted.max_inflight_calls
+        self._version = trusted.version
+        self._permits = BoundedSemaphore(trusted.max_inflight_calls)
+
+    def matches(self, contract: ProviderBoundaryContract) -> bool:
+        trusted = _validated_contract(contract)
+        return (
+            trusted is not None
+            and trusted.hard_boundary_ready
+            and self._boundary_id == trusted.boundary_id
+            and self._max_inflight_calls == trusted.max_inflight_calls
+            and self._version == trusted.version
+        )
+
+    def acquire(self) -> bool:
+        return self._permits.acquire(blocking=False)
+
+    def release(self) -> None:
+        self._permits.release()
+
+
+def _validated_gate(
+    value: object,
+    contract: ProviderBoundaryContract,
+) -> ProviderBoundaryGate | None:
+    if type(value) is not ProviderBoundaryGate:
+        return None
+    try:
+        return value if value.matches(contract) else None
+    except Exception:
+        return None
+
+
 def _trusted_item(item: InteractionInput) -> InteractionInput:
     if type(item) is not InteractionInput:
         raise ValueError("interaction input required")
@@ -98,14 +149,16 @@ def run_hardened_interaction_turn(
     provider: TextProvider,
     *,
     execution_contract: ProviderBoundaryContract | None,
+    admission_gate: ProviderBoundaryGate | None = None,
     cancellation: CancellationFlag | None = None,
     clock: Callable[[], float] = monotonic,
 ) -> InteractionResult:
-    """Admit a provider call only behind a separately qualified hard boundary.
+    """Admit a provider call only behind a qualified, bounded hard boundary.
 
-    The contract is supplied by trusted integration configuration, never by the
-    provider reply or generated text. Actual isolation/termination remains an
-    adapter qualification requirement outside this public generic module.
+    The contract and shared admission gate are trusted integration
+    configuration, never provider/model data. Actual isolation/termination
+    remains an adapter qualification requirement outside this public generic
+    module. The public gate enforces the declared concurrent-entry bound.
     """
     if type(session) is not InteractionSession:
         raise ValueError("interaction session required")
@@ -123,10 +176,38 @@ def run_hardened_interaction_turn(
             session.tokens_used,
             session.elapsed_seconds,
         )
-    return run_interaction_turn(
-        session,
-        trusted_item,
-        provider,
-        cancellation=cancellation,
-        clock=clock,
-    )
+    gate = _validated_gate(admission_gate, contract)
+    if gate is None:
+        return InteractionResult(
+            "unavailable",
+            "provider_inflight_gate_required",
+            trusted_item.request_id,
+            "",
+            trusted_item.evidence_refs,
+            trusted_item.action,
+            session.calls_used,
+            session.tokens_used,
+            session.elapsed_seconds,
+        )
+    if not gate.acquire():
+        return InteractionResult(
+            "unavailable",
+            "provider_inflight_limit_reached",
+            trusted_item.request_id,
+            "",
+            trusted_item.evidence_refs,
+            trusted_item.action,
+            session.calls_used,
+            session.tokens_used,
+            session.elapsed_seconds,
+        )
+    try:
+        return run_interaction_turn(
+            session,
+            trusted_item,
+            provider,
+            cancellation=cancellation,
+            clock=clock,
+        )
+    finally:
+        gate.release()
