@@ -28,7 +28,12 @@ from .text_interaction import (
 
 @dataclass(frozen=True)
 class ProviderBoundaryContract:
-    """Trusted adapter admission facts; never model/provider-generated data."""
+    """Trusted adapter admission facts; never model/provider-generated data.
+
+    max_inflight_calls is enforced process-locally by the public admission gate.
+    A multi-process adapter must separately qualify aggregate enforcement across
+    all of its workers; this generic module does not claim that isolation.
+    """
 
     boundary_id: str
     hard_timeout_enforced: bool
@@ -79,15 +84,16 @@ def _validated_contract(value: object) -> ProviderBoundaryContract | None:
 class _ProviderAdmissionState:
     """Process-local permit pool shared by every live gate for one boundary."""
 
-    __slots__ = ("permits", "__weakref__")
+    __slots__ = ("max_inflight_calls", "permits", "__weakref__")
 
     def __init__(self, max_inflight_calls: int) -> None:
+        self.max_inflight_calls = max_inflight_calls
         self.permits = BoundedSemaphore(max_inflight_calls)
 
 
 _GATE_REGISTRY_LOCK = RLock()
 _GATE_REGISTRY: WeakValueDictionary[
-    tuple[str, str, int],
+    tuple[str, str],
     _ProviderAdmissionState,
 ] = WeakValueDictionary()
 
@@ -95,12 +101,14 @@ _GATE_REGISTRY: WeakValueDictionary[
 def _shared_admission_state(
     contract: ProviderBoundaryContract,
 ) -> _ProviderAdmissionState:
-    key = (contract.boundary_id, contract.version, contract.max_inflight_calls)
+    key = (contract.boundary_id, contract.version)
     with _GATE_REGISTRY_LOCK:
         state = _GATE_REGISTRY.get(key)
         if state is None:
             state = _ProviderAdmissionState(contract.max_inflight_calls)
             _GATE_REGISTRY[key] = state
+        elif state.max_inflight_calls != contract.max_inflight_calls:
+            raise ValueError("conflicting provider boundary capacity")
         return state
 
 
@@ -109,8 +117,9 @@ class ProviderBoundaryGate:
 
     Multiple live gate objects for the same qualified boundary intentionally
     share one process-local permit pool, so reconstructing a gate cannot bypass
-    the declared max_inflight_calls bound. The gate never authorizes an action;
-    it only bounds provider entry.
+    the declared max_inflight_calls bound. Conflicting live capacity declarations
+    for the same boundary/version fail closed instead of creating another pool.
+    The gate never authorizes an action; it only bounds provider entry.
     """
 
     __slots__ = ("_boundary_id", "_max_inflight_calls", "_version", "_state")
