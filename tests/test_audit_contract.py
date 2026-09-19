@@ -184,11 +184,14 @@ class AuditContractTests(unittest.TestCase):
 
     def test_cross_principal_audit_material_is_not_returned(self):
         buffer = AuditBuffer()
-        buffer.append(event())
-        buffer.append(event("event2", request_id="req2", principal_ref="principal2"))
+        own = event()
+        foreign = event("event2", request_id="req2", principal_ref="principal2")
+        buffer.append(own)
+        buffer.append(foreign)
         result = buffer.read_partition("p1", scope(), current_policy_revision="policy1", now=NOW)
-        self.assertEqual((result.status, result.reason), ("denied", "audit_principal_mismatch"))
-        self.assertEqual(result.events, ())
+        self.assertEqual((result.status, result.reason), ("returned", "audit_returned"))
+        self.assertEqual(result.events, (own,))
+        self.assertNotIn(foreign, result.events)
 
     def test_policy_change_and_unauthenticated_scope_deny_audit_read(self):
         buffer = AuditBuffer(); buffer.append(event())
