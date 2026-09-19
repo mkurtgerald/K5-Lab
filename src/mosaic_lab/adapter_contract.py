@@ -12,7 +12,7 @@ from typing import Iterable
 
 from .contracts import token, unit_score
 
-CONTRACT_VERSION = "1"
+CONTRACT_VERSION = "2"
 SUPPORTED_VERSIONS = (CONTRACT_VERSION,)
 MIN_TIMEOUT_MS = 1
 MAX_TIMEOUT_MS = 5_000
@@ -71,6 +71,8 @@ class AdapterRequest:
 @dataclass(frozen=True)
 class AdapterResponse:
     request_id: str
+    partition: str
+    record_id: str
     status: str
     reason_code: str
     operation: str | None = None
@@ -80,6 +82,8 @@ class AdapterResponse:
 
     def __post_init__(self) -> None:
         token(self.request_id)
+        token(self.partition)
+        token(self.record_id)
         token(self.reason_code)
         if self.contract_version != CONTRACT_VERSION:
             raise IncompatibleAdapterContract("unsupported response contract version")
@@ -96,26 +100,37 @@ class AdapterResponse:
             raise ValueError("non-recommendation response cannot carry operation/confidence")
 
 
-def fallback_response(request: AdapterRequest, *, reason_code: str = "adapter_unavailable") -> AdapterResponse:
+def _bound_response(request: AdapterRequest, *, status: str, reason_code: str) -> AdapterResponse:
     return AdapterResponse(
         request_id=request.request_id,
-        status="unavailable",
+        partition=request.partition,
+        record_id=request.record_id,
+        status=status,
         reason_code=reason_code,
     )
 
 
+def fallback_response(request: AdapterRequest, *, reason_code: str = "adapter_unavailable") -> AdapterResponse:
+    return _bound_response(request, status="unavailable", reason_code=reason_code)
+
+
 def normalize_response(request: AdapterRequest, candidate: object) -> AdapterResponse:
-    """Accept only an exact correlated v1 response; otherwise fail closed."""
+    """Accept only an exact request-identity-correlated v2 response; otherwise fail closed."""
     if not isinstance(candidate, AdapterResponse):
-        return AdapterResponse(request.request_id, "error", "malformed_response")
-    if candidate.request_id != request.request_id or candidate.contract_version != request.contract_version:
-        return AdapterResponse(request.request_id, "error", "contract_mismatch")
+        return _bound_response(request, status="error", reason_code="malformed_response")
+    if (
+        candidate.contract_version != request.contract_version
+        or candidate.request_id != request.request_id
+        or candidate.partition != request.partition
+        or candidate.record_id != request.record_id
+    ):
+        return _bound_response(request, status="error", reason_code="contract_mismatch")
     return candidate
 
 
 def contract_document() -> dict[str, object]:
     return {
-        "schema": "k5-lab.adapter-contract/v1",
+        "schema": "k5-lab.adapter-contract/v2",
         "contract_version": CONTRACT_VERSION,
         "supported_versions": list(SUPPORTED_VERSIONS),
         "request": {
@@ -128,12 +143,16 @@ def contract_document() -> dict[str, object]:
             "fields": [
                 "contract_version",
                 "request_id",
+                "partition",
+                "record_id",
                 "status",
                 "reason_code",
                 "operation",
                 "confidence",
                 "authorized",
             ],
+            "opaque_identifiers": ["request_id", "partition", "record_id"],
+            "correlation_fields": ["contract_version", "request_id", "partition", "record_id"],
             "statuses": sorted(_RESPONSE_STATUSES),
             "authorized": False,
             "recommendation_requires": ["operation", "confidence"],
