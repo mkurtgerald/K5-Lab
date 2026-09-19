@@ -19,7 +19,8 @@ class CountingRefs(tuple):
 
 
 def build_full_buffer():
-    evidence_refs = CountingRefs(f"rec{index}" for index in range(MAX_EVIDENCE_REFS))
+    allowed_record_ids = tuple(f"rec{index}" for index in range(MAX_EVIDENCE_REFS))
+    evidence_refs = CountingRefs(allowed_record_ids)
     evidence_digests = tuple(f"{index:064x}" for index in range(MAX_EVIDENCE_REFS))
     sink = AuditBuffer(max_entries=MAX_AUDIT_ENTRIES)
     for index in range(MAX_AUDIT_ENTRIES):
@@ -42,7 +43,7 @@ def build_full_buffer():
             )
         )
     CountingRefs.iterations = 0
-    return sink, tuple(evidence_refs)
+    return sink, allowed_record_ids
 
 
 class AuditTailWorkEnvelopeTests(unittest.TestCase):
