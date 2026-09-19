@@ -6,6 +6,10 @@ from pathlib import Path
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+from mosaic_lab.adapter_contract import CONTRACT_VERSION
+
 FORBIDDEN_IMPORT_ROOTS = {
     "socket",
     "ssl",
@@ -176,10 +180,14 @@ def validate_documents(*, security: dict[str, object], adapter_contract: dict[st
     return errors
 
 
+def active_adapter_contract_path(root: Path = ROOT) -> Path:
+    return root / f"docs/contracts/adapter-v{CONTRACT_VERSION}.json"
+
+
 def validate_repository(root: Path = ROOT) -> list[str]:
     try:
         security = json.loads((root / "provenance/security-review.json").read_text(encoding="utf-8"))
-        adapter = json.loads((root / "docs/contracts/adapter-v1.json").read_text(encoding="utf-8"))
+        adapter = json.loads(active_adapter_contract_path(root).read_text(encoding="utf-8"))
         manifest = json.loads((root / "provenance/release-manifest.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         return [f"security review inputs unavailable or invalid: {exc}"]

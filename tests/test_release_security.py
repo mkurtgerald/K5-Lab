@@ -4,7 +4,8 @@ import subprocess
 import sys
 import unittest
 
-from tools.check_release_security import scan_source, validate_documents, validate_repository
+from mosaic_lab.adapter_contract import CONTRACT_VERSION
+from tools.check_release_security import active_adapter_contract_path, scan_source, validate_documents, validate_repository
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,6 +63,13 @@ class ReleaseSecurityTests(unittest.TestCase):
 
     def test_repository_security_boundary_is_consistent(self):
         self.assertEqual(validate_repository(ROOT), [])
+
+    def test_repository_security_tracks_active_adapter_contract(self):
+        self.assertEqual(
+            active_adapter_contract_path(ROOT),
+            ROOT / f"docs/contracts/adapter-v{CONTRACT_VERSION}.json",
+        )
+        self.assertTrue(active_adapter_contract_path(ROOT).is_file())
 
     def test_cli_runs_from_repository_root(self):
         result = subprocess.run(
