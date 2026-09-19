@@ -241,10 +241,12 @@ class AuditBuffer:
         if now >= utc(scope.valid_until):
             return AuditRead("denied", "audit_scope_expired", partition)
         with self._lock:
-            partition_events = tuple(item for item in self._events if item.partition == partition)
-        if any(item.principal_ref != scope.principal_ref for item in partition_events):
-            return AuditRead("denied", "audit_principal_mismatch", partition)
+            principal_events = tuple(
+                item
+                for item in self._events
+                if item.partition == partition and item.principal_ref == scope.principal_ref
+            )
         allowed = set(scope.allowed_record_ids)
-        if any(any(record_id not in allowed for record_id in item.evidence_refs) for item in partition_events):
+        if any(any(record_id not in allowed for record_id in item.evidence_refs) for item in principal_events):
             return AuditRead("denied", "audit_evidence_out_of_scope", partition)
-        return AuditRead("returned", "audit_returned", partition, partition_events)
+        return AuditRead("returned", "audit_returned", partition, principal_events)
